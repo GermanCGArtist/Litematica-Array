@@ -1,8 +1,13 @@
 package dev.schemarray.mixin;
 
 import dev.schemarray.ArraySync;
+import dev.schemarray.Folders;
+import dev.schemarray.WidgetFolderRow;
 import fi.dy.masa.litematica.gui.widgets.WidgetListSchematicPlacements;
+import fi.dy.masa.litematica.gui.widgets.WidgetSchematicPlacement;
 import fi.dy.masa.litematica.schematic.placement.SchematicPlacement;
+import fi.dy.masa.malilib.gui.widgets.WidgetListBase;
+import fi.dy.masa.malilib.gui.widgets.WidgetListEntryBase;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -12,15 +17,54 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
-/** Litematica's placement list shows only the originals; their array copies are managed by the original. */
+/**
+ * Litematica's placement list shows only the originals (their array copies are managed by the original), arranged
+ * in folders: the list gets folder rows between the placements, which are indented by their depth. While the search
+ * bar has text the list is flat again. The list never sorts itself (shouldSortList stays false), so our order holds.
+ */
 @Mixin(value = WidgetListSchematicPlacements.class, remap = false)
 abstract class WidgetListSchematicPlacementsMixin {
+    private static final int INDENT = 12;
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
     @Inject(method = "getAllEntries", at = @At("RETURN"), cancellable = true, remap = false)
-    private void schemarray$hideCopies(CallbackInfoReturnable<Collection<SchematicPlacement>> cir) {
+    private void schemarray$folders(CallbackInfoReturnable<Collection<SchematicPlacement>> cir) {
         Collection<SchematicPlacement> all = cir.getReturnValue();
         if (all == null) return;
         List<SchematicPlacement> out = new ArrayList<>(all.size());
         for (SchematicPlacement p : all) if (!ArraySync.isCopy(p)) out.add(p);
-        if (out.size() != all.size()) cir.setReturnValue(out);
+
+        var search = ((WidgetListBase<?, ?>) (Object) this).getSearchBarWidget();
+        if (search != null && search.hasFilter()) {
+            Folders.rows(List.of());   // forget the indentation, the list is flat
+            if (out.size() != all.size()) cir.setReturnValue(out);
+            return;
+        }
+        cir.setReturnValue((Collection) Folders.rows(out));
+    }
+
+    /** A folder row's own search text is its name. */
+    @SuppressWarnings("rawtypes")
+    @Inject(method = "getEntryStringsForFilter(Ljava/lang/Object;)Ljava/util/List;", at = @At("HEAD"), cancellable = true, remap = false)
+    private void schemarray$filterStrings(Object entry, CallbackInfoReturnable<List> cir) {
+        if (entry instanceof Folders.Node n) cir.setReturnValue(List.of(n.name.toLowerCase()));
+    }
+
+    /** Folder rows get our widget; placements inside a folder get theirs moved right and narrowed by their depth. */
+    @SuppressWarnings("rawtypes")
+    @Inject(method = "createListEntryWidget(IIIZLjava/lang/Object;)Lfi/dy/masa/malilib/gui/widgets/WidgetListEntryBase;",
+            at = @At("HEAD"), cancellable = true, remap = false)
+    private void schemarray$createRow(int x, int y, int listIndex, boolean isOdd, Object entry, CallbackInfoReturnable<WidgetListEntryBase> cir) {
+        WidgetListSchematicPlacements self = (WidgetListSchematicPlacements) (Object) this;
+        WidgetListBaseAccessor acc = (WidgetListBaseAccessor) self;
+        if (entry instanceof Folders.Node n) {
+            int indent = INDENT * n.depth;
+            cir.setReturnValue(new WidgetFolderRow(x + indent, y, acc.schemarray$entryWidth() - indent, acc.schemarray$entryHeight(), isOdd, n, listIndex));
+        } else if (entry instanceof SchematicPlacement p) {
+            int indent = INDENT * Folders.depthOf(p);
+            if (indent > 0) {
+                cir.setReturnValue(new WidgetSchematicPlacement(x + indent, y, acc.schemarray$entryWidth() - indent, acc.schemarray$entryHeight(), isOdd, p, listIndex, self));
+            }
+        }
     }
 }
