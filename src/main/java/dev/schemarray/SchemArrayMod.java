@@ -14,6 +14,11 @@ public final class SchemArrayMod implements ClientModInitializer {
             } catch (Throwable t) {
                 System.out.println("[SchematicArray] sync failed: " + t);
             }
+            try {
+                Folders.tick(mc);
+            } catch (Throwable t) {
+                System.out.println("[SchematicArray] folders failed: " + t);
+            }
         });
     }
 }
