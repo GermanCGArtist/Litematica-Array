@@ -12,7 +12,7 @@ import net.minecraft.client.input.MouseButtonEvent;
 
 /**
  * A folder row in Litematica's placement list: open/closed arrow, name and count, and on the right the buttons
- * Visible/Hidden, +, Rename and Delete. A click anywhere else on the row opens or closes the folder.
+ * Visible/Hidden, +, Rename and Delete. A click anywhere else on the row opens or closes the folder (see DragDrop: it is done on release, so the row can also be dragged).
  */
 public final class WidgetFolderRow extends WidgetListEntryBase<Folders.Node> {
     private final boolean isOdd;
@@ -60,21 +60,16 @@ public final class WidgetFolderRow extends WidgetListEntryBase<Folders.Node> {
     }
 
     @Override
-    protected boolean onMouseClickedImpl(MouseButtonEvent event, boolean doubleClick) {
-        if (event.input() != 0) return false;
-        Folders.toggleOpen(entry.id);
-        ListRefresh.later();
-        return true;
-    }
-
-    @Override
     public void render(GuiContext ctx, int mouseX, int mouseY, boolean selected) {
         int color = isMouseOver(mouseX, mouseY) ? 0xA0707070 : isOdd ? 0xA0101010 : 0xA0303030;
         RenderUtils.drawRect(ctx, x, y, width, height, color);
+        boolean colored = entry.color >= 0 && entry.color < Folders.COLORS.length;
+        int rgb = colored ? Folders.COLORS[entry.color] : 0;
+        if (colored) RenderUtils.drawRect(ctx, x, y, width, height, 0x50000000 | rgb);
         int tx = x + 4;
         drawString(ctx, tx, y + 7, 0xFFFFFFFF, entry.open ? "v" : ">");
         Icons.FILE_ICON_DIR.renderAt(ctx, tx + 10, y + 5, zLevel, false, false);
-        drawString(ctx, tx + 28, y + 7, entry.hidden ? 0xFF909090 : 0xFFFFFFFF, entry.name + " (" + entry.count + ")");
+        drawString(ctx, tx + 28, y + 7, colored ? 0xFF000000 | rgb : entry.hidden ? 0xFF909090 : 0xFFFFFFFF, entry.name + " (" + entry.count + ")");
         super.render(ctx, mouseX, mouseY, selected);
     }
 }

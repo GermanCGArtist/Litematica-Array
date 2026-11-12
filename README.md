@@ -43,6 +43,16 @@ Every placement row has a new **Move** button, left of Configure: pick `(top lev
 (by name), then the placements (by name). While the search bar has text the list is flat. Array copies stay hidden
 from the list and are never put in a folder.
 
+Select several placements like in a file manager: click selects one, **Ctrl+click** adds or removes a row, **Shift+click**
+selects the range from the last clicked row (Ctrl+Shift adds it). Then **drag** the selection (or a single placement or
+folder) with the left mouse button onto a folder row to put it in there, onto a placement row to put it next to that
+placement, or onto empty space to move it to the top level. Escape or letting go outside the list cancels. A folder
+can't be dropped into itself. **Move** moves the whole selection when its row is selected.
+
+**Right-click** a folder or placement row to pick a color for it from Minecraft's 16 chat colors (or no color). A folder row is tinted and
+its name colored; a placement gets a colored bar (its own color, else the nearest colored folder's). With several placements selected,
+right-clicking one of them colors them all.
+
 Folders are global (all worlds and servers) and kept in `config/schemarray/folders.json`.
 
 ## Install
