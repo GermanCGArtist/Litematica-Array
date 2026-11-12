@@ -10,23 +10,25 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-/** Small screen to pick the folder for a placement: "(top level)" and every folder as an indented tree. */
+/** Small screen to pick the folder for a placement (or several): "(top level)" and every folder as an indented tree. */
 public final class MoveScreen extends GuiBase {
-    private final SchematicPlacement placement;
+    private final List<SchematicPlacement> placements;
     private final Screen back;
 
-    public MoveScreen(Screen back, SchematicPlacement placement) {
+    public MoveScreen(Screen back, List<SchematicPlacement> placements) {
         this.back = back;
-        this.placement = placement;
+        this.placements = List.copyOf(placements);
         setParent(back);
-        setTitle("Move " + placement.getName() + " to");
+        setTitle("Move " + (placements.size() == 1 ? placements.get(0).getName() : placements.size() + " placements") + " to");
     }
 
     @Override
     public void initGui() {
         super.initGui();
         var font = Minecraft.getInstance().font;
-        String current = Folders.folderOf(placement);
+        // the folder they are all in (nothing is marked if they are in different ones)
+        String current = Folders.folderOf(placements.get(0));
+        for (SchematicPlacement p : placements) if (!Objects.equals(Folders.folderOf(p), current)) current = "<mixed>";
         List<Folders.Node> rows = new ArrayList<>();
         rows.add(null);   // (top level)
         rows.addAll(Folders.tree());
@@ -40,7 +42,7 @@ public final class MoveScreen extends GuiBase {
             if (y > bottom) { y = top; x0 += 200; }
             String shown = (Objects.equals(id, current) ? "§a" : "") + label;
             addButton(new ButtonGeneric(x0 + indent, y, font.width(label) + 14, 20, shown), (b, mouse) -> {
-                Folders.move(placement, id);
+                Folders.moveAll(placements, id);
                 GuiBase.openGui(back);
             });
             y += 22;
