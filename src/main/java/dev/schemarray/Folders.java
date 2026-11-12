@@ -38,12 +38,14 @@ public final class Folders {
         String parent;   // folder id, null = top level
         boolean open = true;
         boolean hidden;
+        int color = -1;   // index into COLORS, -1 = none
     }
 
     private static final class Data {
         Map<String, Folder> folders = new LinkedHashMap<>();
         Map<String, String> placements = new LinkedHashMap<>();   // placement hash id -> folder id
         Set<String> hiddenByFolder = new LinkedHashSet<>();
+        Map<String, Integer> placementColors = new LinkedHashMap<>();   // placement hash id -> color index
     }
 
     /** A folder row in the placement list. */
@@ -54,6 +56,7 @@ public final class Folders {
         public final int count;
         public final boolean open;
         public final boolean hidden;
+        public final int color;
 
         Node(String id, Folder f, int depth, int count) {
             this.id = id;
@@ -62,6 +65,7 @@ public final class Folders {
             this.count = count;
             this.open = f.open;
             this.hidden = f.hidden;
+            this.color = f.color;
         }
     }
 
@@ -84,6 +88,7 @@ public final class Folders {
                         if (d.folders != null) data.folders = d.folders;
                         if (d.placements != null) data.placements = d.placements;
                         if (d.hiddenByFolder != null) data.hiddenByFolder = d.hiddenByFolder;
+                        if (d.placementColors != null) data.placementColors = d.placementColors;
                     }
                 } catch (Exception ex) {
                     System.out.println("[SchematicArray] cannot read " + f + ": " + ex);
@@ -234,6 +239,84 @@ public final class Folders {
         String id = p.getHashId().toString();
         if (folder == null || !data().folders.containsKey(folder)) data().placements.remove(id);
         else data().placements.put(id, folder);
+        save();
+    }
+
+    /** Minecraft's 16 chat colors (§0-§f) as RGB; a color is an index into this, -1 = none. */
+    public static final int[] COLORS = {
+            0x000000, 0x0000AA, 0x00AA00, 0x00AAAA, 0xAA0000, 0xAA00AA, 0xFFAA00, 0xAAAAAA,
+            0x555555, 0x5555FF, 0x55FF55, 0x55FFFF, 0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF};
+
+    public static void setFolderColor(String id, int color) {
+        Folder f = data().folders.get(id);
+        if (f == null) return;
+        f.color = color;
+        save();
+    }
+
+    /** The placement's own color, -1 = none. */
+    public static int ownColor(SchematicPlacement p) {
+        Integer c = data().placementColors.get(p.getHashId().toString());
+        return c == null || c < 0 || c >= COLORS.length ? -1 : c;
+    }
+
+    public static void setPlacementColors(Collection<SchematicPlacement> placements, int color) {
+        for (SchematicPlacement p : placements) {
+            String id = p.getHashId().toString();
+            if (color < 0) data().placementColors.remove(id);
+            else data().placementColors.put(id, color);
+        }
+        save();
+    }
+
+    /** The color the row shows: its own, else that of the nearest colored folder above it, else -1. */
+    public static int effectiveColor(SchematicPlacement p) {
+        int own = ownColor(p);
+        if (own >= 0) return own;
+        Set<String> seen = new HashSet<>();
+        String folder = folderOf(p);
+        while (folder != null && seen.add(folder)) {
+            Folder f = data().folders.get(folder);
+            if (f == null) return -1;
+            if (f.color >= 0 && f.color < COLORS.length) return f.color;
+            folder = parentId(f);
+        }
+        return -1;
+    }
+
+    /** True if the folder is {@code ancestor} itself or sits somewhere below it. */
+    public static boolean isInside(String folder, String ancestor) {
+        Set<String> seen = new HashSet<>();
+        while (folder != null && seen.add(folder)) {
+            if (folder.equals(ancestor)) return true;
+            Folder f = data().folders.get(folder);
+            if (f == null) return false;
+            folder = parentId(f);
+        }
+        return false;
+    }
+
+    /** Moves the folder (with everything in it) into the parent (null = top level); false if that would put it into itself. */
+    public static boolean moveFolder(String id, String parent) {
+        Folder f = data().folders.get(id);
+        if (f == null) return false;
+        if (parent != null && (!data().folders.containsKey(parent) || isInside(parent, id))) return false;
+        f.parent = parent;
+        if (parent != null) data().folders.get(parent).open = true;
+        save();
+        return true;
+    }
+
+    /** Puts all the placements into the folder (null = top level), opens that folder and saves once. */
+    public static void moveAll(Collection<SchematicPlacement> placements, String folder) {
+        boolean top = folder == null || !data().folders.containsKey(folder);
+        for (SchematicPlacement p : placements) {
+            if (ArraySync.isCopy(p)) continue;
+            String id = p.getHashId().toString();
+            if (top) data().placements.remove(id);
+            else data().placements.put(id, folder);
+        }
+        if (!top) data().folders.get(folder).open = true;
         save();
     }
 

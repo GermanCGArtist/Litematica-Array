@@ -3,6 +3,7 @@ package dev.schemarray.mixin;
 import dev.schemarray.ArraySync;
 import dev.schemarray.Folders;
 import dev.schemarray.WidgetFolderRow;
+import fi.dy.masa.litematica.gui.GuiSchematicPlacementsList;
 import fi.dy.masa.litematica.gui.widgets.WidgetListSchematicPlacements;
 import fi.dy.masa.litematica.gui.widgets.WidgetSchematicPlacement;
 import fi.dy.masa.litematica.schematic.placement.SchematicPlacement;
@@ -11,6 +12,7 @@ import fi.dy.masa.malilib.gui.widgets.WidgetListEntryBase;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.ArrayList;
@@ -25,6 +27,12 @@ import java.util.List;
 @Mixin(value = WidgetListSchematicPlacements.class, remap = false)
 abstract class WidgetListSchematicPlacementsMixin {
     private static final int INDENT = 12;
+
+    /** malilib draws the rows of its selectedEntries as selected when this is on (DragDrop keeps that set). */
+    @Inject(method = "<init>(IIIILfi/dy/masa/litematica/gui/GuiSchematicPlacementsList;)V", at = @At("TAIL"), remap = false)
+    private void schemarray$multiSelection(int x, int y, int width, int height, GuiSchematicPlacementsList parent, CallbackInfo ci) {
+        ((WidgetListBaseAccessor) (Object) this).schemarray$setMultiSelection(true);
+    }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     @Inject(method = "getAllEntries", at = @At("RETURN"), cancellable = true, remap = false)
