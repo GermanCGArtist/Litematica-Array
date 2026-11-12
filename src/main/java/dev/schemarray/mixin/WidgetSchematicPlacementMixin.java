@@ -1,5 +1,6 @@
 package dev.schemarray.mixin;
 
+import dev.schemarray.Compat;
 import dev.schemarray.ArraySync;
 import dev.schemarray.DragDrop;
 import dev.schemarray.Folders;
@@ -34,7 +35,7 @@ abstract class WidgetSchematicPlacementMixin {
                 for (SchematicPlacement p : DragDrop.selection()) if (!ArraySync.isCopy(p)) moving.add(p);
             }
             if (moving.isEmpty()) moving.add(w.placement);
-            GuiBase.openGui(new MoveScreen(Minecraft.getInstance().screen, moving));
+            GuiBase.openGui(new MoveScreen(Compat.screen(), moving));
         });
         w.buttonsStartX = move.getX() - 1;
 
