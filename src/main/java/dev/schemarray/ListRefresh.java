@@ -11,7 +11,7 @@ public final class ListRefresh {
     public static void later() {
         Minecraft mc = Minecraft.getInstance();
         mc.execute(() -> {
-            if (mc.screen instanceof GuiSchematicPlacementsList gui) {
+            if (Compat.screen() instanceof GuiSchematicPlacementsList gui) {
                 var list = ((GuiListBaseAccessor) gui).schemarray$listWidget();
                 if (list != null) list.refreshEntries();
             }
