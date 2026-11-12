@@ -32,7 +32,7 @@ public final class WidgetFolderRow extends WidgetListEntryBase<Folders.Node> {
         bx = del.getX() - 1;
 
         ButtonGeneric rename = new ButtonGeneric(bx, by, -1, true, "Rename");
-        addButton(rename, (b, mouse) -> GuiBase.openGui(new GuiTextInput(64, "Rename folder", node.name, Minecraft.getInstance().screen, s -> {
+        addButton(rename, (b, mouse) -> GuiBase.openGui(new GuiTextInput(64, "Rename folder", node.name, Compat.screen(), s -> {
             String name = s.trim();
             if (!name.isEmpty()) Folders.rename(node.id, name);
         })));
@@ -40,7 +40,7 @@ public final class WidgetFolderRow extends WidgetListEntryBase<Folders.Node> {
 
         ButtonGeneric add = new ButtonGeneric(bx, by, -1, true, "+");
         add.setHoverStrings("New subfolder");
-        addButton(add, (b, mouse) -> GuiBase.openGui(new GuiTextInput(64, "New subfolder", "", Minecraft.getInstance().screen, s -> {
+        addButton(add, (b, mouse) -> GuiBase.openGui(new GuiTextInput(64, "New subfolder", "", Compat.screen(), s -> {
             String name = s.trim();
             if (!name.isEmpty()) Folders.create(name, node.id);
         })));
