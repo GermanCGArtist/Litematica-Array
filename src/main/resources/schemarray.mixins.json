@@ -5,8 +5,13 @@
   "compatibilityLevel": "JAVA_25",
   "client": [
     "GuiBaseAccessor",
+    "GuiListBaseAccessor",
     "GuiPlacementConfigurationMixin",
-    "WidgetListSchematicPlacementsMixin"
+    "GuiSchematicPlacementsListMixin",
+    "WidgetContainerAccessor",
+    "WidgetListBaseAccessor",
+    "WidgetListSchematicPlacementsMixin",
+    "WidgetSchematicPlacementMixin"
   ],
   "injectors": {
     "defaultRequire": 0

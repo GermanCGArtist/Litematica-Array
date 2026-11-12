@@ -28,6 +28,23 @@ across restarts in `config/schemarray/arrays.json`.
 Limits: up to 1024 copies per array; the material list of the original counts one copy; sub-regions moved inside
 the original are not copied over (only switched on/off).
 
+### Folders
+
+Litematica's placement list (`M` → **Schematic placements**) can be sorted into folders. **New folder** (bottom left)
+makes a top level folder. A folder row shows `v`/`>` (open/closed), its name and how many placements are inside it
+(subfolders included); a click anywhere on the row opens or closes it. Its buttons:
+
+- **Visible / Hidden**: Hidden switches the rendering of everything in the folder (and its subfolders) off. Only the
+  rendering is switched, never Enabled, and placements you had switched off yourself stay off when you show the folder again.
+- **+**: a new subfolder. **Rename**: renames the folder.
+- **Delete**: needs Shift held. The folder goes, its placements and subfolders move up one level; no placement is removed.
+
+Every placement row has a new **Move** button, left of Configure: pick `(top level)` or any folder. Folders come first
+(by name), then the placements (by name). While the search bar has text the list is flat. Array copies stay hidden
+from the list and are never put in a folder.
+
+Folders are global (all worlds and servers) and kept in `config/schemarray/folders.json`.
+
 ## Install
 
 Download the jar for your Minecraft version from [Releases](https://github.com/GermanCGArtist/Litematica-Array/releases)
