@@ -1,0 +1,14 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "dev.schemarray.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "GuiBaseAccessor",
+    "GuiPlacementConfigurationMixin",
+    "WidgetListSchematicPlacementsMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}
