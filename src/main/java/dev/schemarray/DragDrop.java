@@ -13,7 +13,6 @@ import fi.dy.masa.malilib.render.GuiContext;
 import fi.dy.masa.malilib.render.RenderUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.input.MouseButtonEvent;
-import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -164,12 +163,8 @@ public final class DragDrop {
     // ---------------------------------------------------------------------------------------------- drag
 
     /** Polled every frame (mouse events of a consumed press are not forwarded as drags): start, finish or continue. */
-    /**
-     * Whether the left mouse button is held right now. Asks GLFW: Minecraft's MouseHandler.isLeftPressed is not
-     * updated while a screen handles the click, so it stays false inside menus.
-     */
     private static boolean leftDown() {
-        return GLFW.glfwGetMouseButton(Minecraft.getInstance().getWindow().handle(), GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
+        return Compat.leftDown();
     }
 
     public static void poll(WidgetListBase<?, ?> list, int mx, int my) {
