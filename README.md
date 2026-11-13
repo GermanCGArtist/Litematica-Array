@@ -1,7 +1,7 @@
 # Litematica Array
 
 A small client-side Fabric addon for [Litematica](https://modrinth.com/mod/litematica): repeat a schematic placement
-along X, Y and Z, right in Litematica's placement configuration, with a live preview. No new schematic file is made.
+along X, Y and Z, right in Litematica's placement configuration, with a live preview. Arrays make no new schematic file; the **Shape Generator** builds shapes from blocks and saves them as schematics.
 
 ## Use
 
@@ -54,6 +54,56 @@ its name colored; a placement gets a colored bar (its own color, else the neares
 right-clicking one of them colors them all.
 
 Folders are global (all worlds and servers) and kept in `config/schemarray/folders.json`.
+
+### Shape Generator
+
+`M` → **Shape Generator** (at the end of the right-hand column) makes a solid or hollow shape out of blocks and saves it
+as a schematic. Each side is 1 to 256 blocks.
+
+- **Box**: solid.
+- **Plane**: flat, 1 thick, normal to **Axis**.
+- **Frame**: the 12 edges of the box; Thickness is the edge width.
+- **Ellipsoid**: fills the box (equal sides = sphere).
+- **Dome**: upper half of an ellipsoid along **Axis**; the size along it is the height.
+- **Cylinder**: along **Axis**, filling the box.
+- **Cone**: along **Axis**, base at the low end; **Top diameter** (0 = sharp tip).
+- **Pyramid**: base at the low end; **Top size** (0 = point).
+- **Torus**: ring lying normal to **Axis**; **Tube diameter**.
+- **Arch**: half ring; **Arch width** is the ring width.
+- **Tube**: hollow cylinder along **Axis**, open ends; **Wall width**.
+- **Grid**: lines every **Spacing** blocks, **Line width** wide. Size 1 along **Axis** = flat grid, else a 3D lattice.
+
+**Outline** is the shell, **Fill** the inside. Thickness is the shell width (as thick as the shape = all outline).
+Leave **Fill** empty for a hollow shape.
+
+Each of **Outline** and **Fill** takes blocks:
+
+- Type `stone` or `minecraft:stone`; add a state in brackets: `oak_log[axis=x]`.
+- Mix with weights: `60%stone_bricks,40%andesite`. A part without `%` weighs 1.
+- **Hand** adds the block in your main hand (in Single mode it replaces the field).
+- Ids are suggested while you type; **Tab** takes the first one, or click one. An unknown block turns red and disables **Generate**.
+
+Pattern modes:
+
+- **Single**: always the first block.
+- **Mix**: random by weight; **Seed** fixes it, **Dice** rolls a new one.
+- **Checker**: alternates in cells of **Cell X/Y/Z** blocks.
+- **Stripes**: alternates bands of **Width** along **Axis**.
+- **Gradient**: blocks in order along **Axis**, in equal bands; **Dither** blends the edges.
+- **Diagonal**: bands of **Width** along x + z (meaningful with **Axis** Y).
+- **Brick**: bricks of **Cell X/Y/Z**, every other row shifted by half; a second block is the mortar.
+
+- The shape shows as a ghost in the world and updates with every change. Its min corner sits at your position, or its
+  center with **Anchor: Center**.
+- Move the ghost with Litematica's tools; the screen keeps the spot until you toggle the anchor.
+- Drag the 3D view to orbit, scroll to zoom, **Reset view** to start over.
+- **Peek** (hold it, or hold `G` with no text field focused) hides the panel to show the ghost.
+
+- **Generate** writes `<name>.litematic` into Litematica's schematics folder, turns the ghost into a normal placement
+  and closes. An existing file blocks it; hold **Shift** to overwrite, which also removes placements that used the old file.
+- **Cancel** or Esc closes the screen and removes the ghost.
+- **Load** a preset, or type a name and **Save** the current settings; **Delete** needs Shift.
+- Presets and your last settings are kept in `config/schemarray/shapes.json`; the last settings return when you reopen the screen.
 
 ## Install
 
