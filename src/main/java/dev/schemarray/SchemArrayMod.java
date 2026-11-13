@@ -8,6 +8,7 @@ public final class SchemArrayMod implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         if (!FabricLoader.getInstance().isModLoaded("litematica")) return;
+        ThumbnailCompat.register();
         ClientTickEvents.END_CLIENT_TICK.register(mc -> {
             try {
                 ArraySync.tick(mc);
