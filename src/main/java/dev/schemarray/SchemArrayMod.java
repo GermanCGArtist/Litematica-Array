@@ -10,6 +10,7 @@ public final class SchemArrayMod implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         if (!FabricLoader.getInstance().isModLoaded("litematica")) return;
+        ThumbnailCompat.register();
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> ShapePreview.clear());
         ClientTickEvents.END_CLIENT_TICK.register(mc -> {
             try {
