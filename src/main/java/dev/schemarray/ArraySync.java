@@ -1,5 +1,6 @@
 package dev.schemarray;
 
+import dev.schemarray.shape.mc.ShapePreview;
 import fi.dy.masa.litematica.data.DataManager;
 import fi.dy.masa.litematica.schematic.LitematicaSchematic;
 import fi.dy.masa.litematica.schematic.placement.SchematicPlacement;
@@ -62,7 +63,9 @@ public final class ArraySync {
         if (arrays.isEmpty()) return;
         SchematicPlacementManager mgr = DataManager.getSchematicPlacementManager();
         Map<String, SchematicPlacement> byId = new HashMap<>();
-        for (SchematicPlacement p : mgr.getAllSchematicsPlacements()) byId.put(p.getHashId().toString(), p);
+        for (SchematicPlacement p : mgr.getAllSchematicsPlacements()) {
+            if (!ShapePreview.isPreview(p)) byId.put(p.getHashId().toString(), p);
+        }
 
         if (rebuildAt.remove((Integer) ticks)) {
             for (var e : arrays.entrySet()) {
