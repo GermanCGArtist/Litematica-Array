@@ -7,6 +7,7 @@ group = project.maven_group
 base { archivesName = project.archives_base_name }
 
 repositories {
+    mavenCentral()
     exclusiveContent {
         forRepository { maven { name = 'Modrinth'; url = 'https://api.modrinth.com/maven' } }
         filter { includeGroup 'maven.modrinth' }
@@ -22,7 +23,13 @@ dependencies {
     // Litematica and malilib only to compile against; the player has them installed
     compileOnly "maven.modrinth:litematica:${project.litematica_version}"
     compileOnly "maven.modrinth:malilib:${project.malilib_version}"
+
+    // Unit tests for the Minecraft-free shape core (dev.schemarray.shape)
+    testImplementation "org.junit.jupiter:junit-jupiter:5.11.4"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
+
+test { useJUnitPlatform() }
 
 processResources {
     def props = [version: project.version, minecraft_dep: project.minecraft_dep]
