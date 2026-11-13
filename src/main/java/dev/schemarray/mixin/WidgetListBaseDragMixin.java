@@ -52,10 +52,10 @@ abstract class WidgetListBaseDragMixin {
     /** Escape cancels a drag (and does not close the screen). */
     @Inject(method = "onKeyTyped(Lnet/minecraft/client/input/KeyEvent;)Z", at = @At("HEAD"), cancellable = true, remap = false)
     private void schemarray$escape(KeyEvent event, CallbackInfoReturnable<Boolean> cir) {
-        if (event.key() == 256 && schemarray$ours() && ColorMenu.isOpen()) {
+        if (event.isEscape() && schemarray$ours() && ColorMenu.isOpen()) {
             ColorMenu.close();
             cir.setReturnValue(true);
-        } else if (event.key() == 256 && schemarray$ours() && DragDrop.isDragging(schemarray$self())) {
+        } else if (event.isEscape() && schemarray$ours() && DragDrop.isDragging(schemarray$self())) {
             DragDrop.cancel();
             cir.setReturnValue(true);
         }

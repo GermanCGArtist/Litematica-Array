@@ -685,8 +685,8 @@ public class ShapeGeneratorScreen extends GuiBase {
 
     @Override
     public boolean onKeyTyped(KeyEvent event) {
-        if (event.key() == InputConstants.KEY_TAB && (outline.acceptFirst() || fill.acceptFirst())) return true;
-        if (event.key() == InputConstants.KEY_G && event.modifiers() == 0 && !typing()) {
+        if (event.input() == InputConstants.KEY_TAB && (outline.acceptFirst() || fill.acceptFirst())) return true;
+        if (event.input() == InputConstants.KEY_G && event.modifiers() == 0 && !typing()) {
             peekKey = true;
             return true;
         }
@@ -695,7 +695,7 @@ public class ShapeGeneratorScreen extends GuiBase {
 
     @Override
     public boolean keyReleased(KeyEvent event) {
-        if (event.key() == InputConstants.KEY_G && peekKey) {
+        if (event.input() == InputConstants.KEY_G && peekKey) {
             peekKey = false;
             return true;
         }
