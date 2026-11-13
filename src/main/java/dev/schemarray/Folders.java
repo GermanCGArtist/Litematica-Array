@@ -2,6 +2,7 @@ package dev.schemarray;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import dev.schemarray.shape.mc.ShapePreview;
 import fi.dy.masa.litematica.data.DataManager;
 import fi.dy.masa.litematica.schematic.placement.SchematicPlacement;
 import net.fabricmc.loader.api.FabricLoader;
@@ -338,7 +339,7 @@ public final class Folders {
         if (d.folders.isEmpty() && d.hiddenByFolder.isEmpty()) return;
         boolean changed = false;
         for (SchematicPlacement p : DataManager.getSchematicPlacementManager().getAllSchematicsPlacements()) {
-            if (ArraySync.isCopy(p)) continue;
+            if (ArraySync.isCopy(p) || ShapePreview.isPreview(p)) continue;
             String id = p.getHashId().toString();
             if (hidden(folderOf(id))) {
                 if (p.isRenderingEnabled()) {
