@@ -12,6 +12,7 @@ import fi.dy.masa.malilib.gui.button.ButtonGeneric;
 import fi.dy.masa.malilib.gui.widgets.WidgetCheckBox;
 import fi.dy.masa.malilib.gui.wrappers.TextFieldType;
 import fi.dy.masa.malilib.render.GuiContext;
+import fi.dy.masa.malilib.render.RenderUtils;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.network.chat.Component;
 
@@ -26,6 +27,7 @@ import java.util.function.Consumer;
  *
  *   Outline  [Mode          v]
  *   [stone or 60%a,40%b   ] [Hand]
+ *   2+ blocks: stone,andesite      (grey, multi-block modes)
  *   Cell X[ ] Y[ ] Z[ ]            (Checker, Brick)
  *   [Axis: Y] Width [ ][+-] [ ] Dither   (Stripes, Gradient, Diagonal)
  *   Seed [      ] [Dice]           (Mix)
@@ -53,6 +55,7 @@ final class BlockSlotEditor {
     private GuiTextFieldGeneric blockField;
     private ButtonGeneric axisButton;
     private String error;
+    private int hintX, hintY;
 
     private String suggestionKey = "";
     private List<String> suggestions = List.of();
@@ -131,7 +134,7 @@ final class BlockSlotEditor {
     /** Adds the widgets at (x, y), w wide; returns the y below them. */
     int init(ShapeGeneratorScreen g, int x, int y, int w) {
         g.addLabel(x, y + 6, 52, 10, WHITE, title);
-        modeBox = new ShapeDropDown<>(x + 52, y, 100, List.of(PatternMode.values()), m -> m.displayName);
+        modeBox = new ShapeDropDown<>(x + 52, y, 100, List.of(PatternMode.values()), m -> m.displayName, g.getScreenHeight());
         modeBox.setSelectedEntry(mode);
         g.addDropDown(modeBox);
         y += ROW;
@@ -144,11 +147,17 @@ final class BlockSlotEditor {
             return false;
         }, TextFieldType.STRING);
         blockField.setMaxLength(512);
-        if (!emptyHint.isEmpty()) blockField.setHint(Component.literal(emptyHint));
+        if (multi()) blockField.setHint(Component.literal(listHint()));
+        else if (!emptyHint.isEmpty()) blockField.setHint(Component.literal(emptyHint));
         validate();
         g.addButton(new ButtonGeneric(x + w - handW, y, handW, 20, "Hand", "Use the block in your main hand",
-                mode == PatternMode.SINGLE ? "Replaces the field." : "Adds it to the list."), (b, mouse) -> hand());
+                multi() ? "Appends ,<block> to the list." : "Replaces the field."), (b, mouse) -> hand());
         y += ROW;
+        if (multi()) {   // room for the grey syntax line under the field
+            hintX = x;
+            hintY = y - 3;
+            y += 9;
+        }
 
         switch (mode) {
             case CHECKER, BRICK -> cellRow(g, x, y);
@@ -223,13 +232,42 @@ final class BlockSlotEditor {
         });
     }
 
+    private boolean multi() {
+        return mode != PatternMode.SINGLE;
+    }
+
+    /** What the field takes in the current mode: "2+ blocks: stone,andesite". */
+    private String listHint() {
+        String example = switch (mode) {
+            case MIX -> "60%stone,40%andesite";
+            case BRICK -> "brick,mortar";
+            case GRADIENT -> "first,...,last";
+            default -> "stone,andesite";
+        };
+        return "2+ blocks: " + example;
+    }
+
+    /** The grey syntax line under the block field while it holds a single block in a multi-block mode. */
+    void drawHint(GuiContext ctx, ShapeGeneratorScreen g) {
+        if (multi() && entries().size() == 1) g.drawString(ctx, listHint(), hintX, hintY, GRAY);
+    }
+
+    /** Tooltip of the block field. */
+    void drawFieldTooltip(GuiContext ctx, int mouseX, int mouseY) {
+        if (blockField == null || !blockField.isMouseOver(mouseX, mouseY) || !suggestions().isEmpty()) return;
+        RenderUtils.drawHoverText(ctx, mouseX + 8, mouseY + 4, List.of(
+                "Block id, with a state in brackets: oak_log[axis=x].",
+                "Several blocks, comma separated: stone,andesite.",
+                "Weights with %: 60%stone,40%andesite."));
+    }
+
     private void hand() {
         String s = BlockParsing.fromMainHand();
         if (s == null) {
             message.accept("No block in your main hand");
             return;
         }
-        setText(mode == PatternMode.SINGLE || text.isBlank() ? s : text + "," + s);
+        setText(!multi() || text.isBlank() ? s : text + "," + s);
     }
 
     // ---- autocomplete ----

@@ -24,7 +24,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Last settings and named presets in config/schemarray/shapes.json: {"last": settings, "presets": {name: settings}}.
+ * Last settings and named presets in config/schemarray/shapes.json: {"last": settings, "ghost": bool, "presets": {name: settings}}.
  * The records are mapped to JSON by hand and read back tolerantly: a missing or broken field falls back to its
  * default, so an old or hand-edited file never loses the rest.
  */
@@ -34,6 +34,7 @@ public final class ShapePresets {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static boolean loaded;
     private static GeneratorSettings last = GeneratorSettings.defaults();
+    private static boolean ghost = true;
     private static final Map<String, GeneratorSettings> PRESETS = new LinkedHashMap<>();
 
     private static Path file() {
@@ -50,6 +51,7 @@ public final class ShapePresets {
             if (root == null || !root.isJsonObject()) return;
             JsonObject o = root.getAsJsonObject();
             if (o.get("last") instanceof JsonObject l) last = readSettings(l);
+            ghost = bool(o, "ghost", true);
             if (o.get("presets") instanceof JsonObject p) {
                 for (var e : p.entrySet()) if (e.getValue() instanceof JsonObject s) PRESETS.put(e.getKey(), readSettings(s));
             }
@@ -62,6 +64,7 @@ public final class ShapePresets {
         Path f = file();
         JsonObject root = new JsonObject();
         root.add("last", writeSettings(last));
+        root.addProperty("ghost", ghost);
         JsonObject presets = new JsonObject();
         for (var e : PRESETS.entrySet()) presets.add(e.getKey(), writeSettings(e.getValue()));
         root.add("presets", presets);
@@ -84,6 +87,18 @@ public final class ShapePresets {
     public static void setLast(GeneratorSettings settings) {
         load();
         last = settings;
+        save();
+    }
+
+    /** Whether the in-world ghost is switched on (default true). */
+    public static boolean ghost() {
+        load();
+        return ghost;
+    }
+
+    public static void setGhost(boolean on) {
+        load();
+        ghost = on;
         save();
     }
 

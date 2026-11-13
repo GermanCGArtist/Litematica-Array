@@ -9,6 +9,8 @@ import fi.dy.masa.litematica.schematic.placement.SchematicPlacement;
 import fi.dy.masa.litematica.schematic.placement.SchematicPlacementManager;
 import net.minecraft.core.BlockPos;
 
+import java.util.Arrays;
+
 /**
  * The in-world ghost: at most one temporary Litematica placement of the current VoxelResult. Render thread only.
  * It is marked "do not save", so Litematica never writes it to its placement file, and the placement code of this
@@ -18,14 +20,33 @@ public final class ShapePreview {
     private ShapePreview() {}
 
     private static SchematicPlacement placement;
+    private static VoxelResult shown;
 
     /**
-     * Shows result at origin (the placement's min corner; see originFor). Replaces the previous ghost. A null
-     * result just removes it.
+     * Shows result at origin (the placement's min corner; see originFor). Replaces the previous ghost: identical
+     * voxels at the same spot change nothing, a result of the same size is written into the existing schematic
+     * (no placement removed and added again), anything else makes a new placement. A null result just removes it.
      */
     public static void show(VoxelResult result, BlockPos origin) {
+        if (result == null) {
+            clear();
+            return;
+        }
+        if (placement != null && shown != null && sameSize(shown, result)) {
+            boolean same = Arrays.equals(shown.cells(), result.cells()) && shown.palette().equals(result.palette());
+            try {
+                if (!same) {
+                    ShapeSchematics.refill(placement.getSchematic(), result);
+                    DataManager.getSchematicPlacementManager().markAllPlacementsOfSchematicForRebuild(placement.getSchematic());
+                }
+                if (!origin.equals(placement.getOrigin())) placement.setOrigin(origin, null);
+                shown = result;
+                return;
+            } catch (RuntimeException e) {
+                // an invalid block, or a placement Litematica no longer knows: make a fresh one below
+            }
+        }
         clear();
-        if (result == null) return;
         LitematicaSchematic schematic;
         try {
             schematic = ShapeSchematics.build(result, "Shape preview");
@@ -41,6 +62,11 @@ public final class ShapePreview {
         // adding selects the new placement when none was selected; the ghost must not take the selection
         if (mgr.getSelectedSchematicPlacement() != previous) mgr.setSelectedSchematicPlacement(previous);
         placement = p;
+        shown = result;
+    }
+
+    private static boolean sameSize(VoxelResult a, VoxelResult b) {
+        return a.sizeX() == b.sizeX() && a.sizeY() == b.sizeY() && a.sizeZ() == b.sizeZ();
     }
 
     /** Where the ghost goes for this spec: the player's block position as min corner, or as box center when spec.anchorCenter(). */
@@ -61,6 +87,7 @@ public final class ShapePreview {
     public static void clear() {
         SchematicPlacement p = placement;
         placement = null;
+        shown = null;
         if (p == null) return;
         try {
             DataManager.getSchematicPlacementManager().removeSchematicPlacement(p, false);

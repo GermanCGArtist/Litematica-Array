@@ -81,6 +81,7 @@ Each of **Outline** and **Fill** takes blocks:
 - Type `stone` or `minecraft:stone`; add a state in brackets: `oak_log[axis=x]`.
 - Mix with weights: `60%stone_bricks,40%andesite`. A part without `%` weighs 1.
 - **Hand** adds the block in your main hand (in Single mode it replaces the field).
+- The multi-block modes (everything but Single) take two or more blocks separated by commas, e.g. `stone,andesite`; the field shows the syntax.
 - Ids are suggested while you type; **Tab** takes the first one, or click one. An unknown block turns red and disables **Generate**.
 
 Pattern modes:
@@ -95,6 +96,7 @@ Pattern modes:
 
 - The shape shows as a ghost in the world and updates with every change. Its min corner sits at your position, or its
   center with **Anchor: Center**.
+- **Ghost: Off** removes the ghost from the world (the 3D view keeps updating); the choice is remembered.
 - Move the ghost with Litematica's tools; the screen keeps the spot until you toggle the anchor.
 - Drag the 3D view to orbit, scroll to zoom, **Reset view** to start over.
 - **Peek** (hold it, or hold `G` with no text field focused) hides the panel to show the ghost.

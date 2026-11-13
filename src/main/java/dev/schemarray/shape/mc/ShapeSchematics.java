@@ -7,6 +7,7 @@ import fi.dy.masa.litematica.schematic.container.LitematicaBlockStateContainer;
 import fi.dy.masa.litematica.selection.AreaSelection;
 import fi.dy.masa.litematica.selection.Box;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
 /** VoxelResult -> LitematicaSchematic: one region "Shape" from 0,0,0 to size-1, author = the player. Render thread only. */
@@ -17,12 +18,7 @@ public final class ShapeSchematics {
 
     /** Builds the schematic; throws IllegalArgumentException naming the block when a palette entry does not parse. */
     public static LitematicaSchematic build(VoxelResult r, String name) {
-        BlockState[] states = new BlockState[r.palette().size()];
-        for (int i = 0; i < states.length; i++) {
-            String entry = r.palette().get(i);
-            states[i] = BlockParsing.parse(entry);
-            if (states[i] == null) throw new IllegalArgumentException("Invalid block: " + entry);
-        }
+        BlockState[] states = states(r);
 
         AreaSelection area = new AreaSelection();
         area.setName(name);
@@ -31,21 +27,42 @@ public final class ShapeSchematics {
         LitematicaSchematic schematic = LitematicaSchematic.createEmptySchematic(area, Compat.playerName());
         if (schematic == null) throw new IllegalArgumentException("Could not create the schematic");
 
+        fill(schematic, r, states, false);
+        long now = System.currentTimeMillis();
+        schematic.getMetadata().setTimeCreated(now);
+        schematic.getMetadata().setTimeModified(now);
+        return schematic;
+    }
+
+    /** Overwrites every cell of a schematic made by build() for a result of the same size (the in-place ghost update). */
+    static void refill(LitematicaSchematic schematic, VoxelResult r) {
+        fill(schematic, r, states(r), true);
+        schematic.getMetadata().setTimeModified(System.currentTimeMillis());
+    }
+
+    private static BlockState[] states(VoxelResult r) {
+        BlockState[] states = new BlockState[r.palette().size()];
+        for (int i = 0; i < states.length; i++) {
+            String entry = r.palette().get(i);
+            states[i] = BlockParsing.parse(entry);
+            if (states[i] == null) throw new IllegalArgumentException("Invalid block: " + entry);
+        }
+        return states;
+    }
+
+    private static void fill(LitematicaSchematic schematic, VoxelResult r, BlockState[] states, boolean clearAir) {
         LitematicaBlockStateContainer container = schematic.getSubRegionContainer(REGION);
+        BlockState air = Blocks.AIR.defaultBlockState();
         short[] cells = r.cells();
         int i = 0;
         for (int y = 0; y < r.sizeY(); y++) {
             for (int z = 0; z < r.sizeZ(); z++) {
                 for (int x = 0; x < r.sizeX(); x++, i++) {
                     if (cells[i] != 0) container.set(x, y, z, states[cells[i] - 1]);
+                    else if (clearAir) container.set(x, y, z, air);
                 }
             }
         }
-
-        long now = System.currentTimeMillis();
         schematic.getMetadata().setTotalBlocks(r.blockCount());
-        schematic.getMetadata().setTimeCreated(now);
-        schematic.getMetadata().setTimeModified(now);
-        return schematic;
     }
 }

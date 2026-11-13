@@ -58,6 +58,8 @@ public class ShapeGeneratorScreen extends GuiBase {
     private int sizeX, sizeY, sizeZ, thickness, param1, param2;
     private Axis axis;
     private boolean anchorCenter;
+    private boolean ghost = ShapePresets.ghost();
+    private BlockPos origin;   // where the ghost sits (or sat, with the ghost off)
     private String name;
     private String presetSelected, presetText = "";
     private final BlockSlotEditor outline, fill;
@@ -75,6 +77,7 @@ public class ShapeGeneratorScreen extends GuiBase {
     private ButtonGeneric generate;
     private int thumbX, thumbY, thumbW, thumbH;
     private boolean thumbDrag, peekButton, peekKey;
+    private int realMouseX, realMouseY;
 
     public ShapeGeneratorScreen(Screen parent) {
         this.setParent(parent);
@@ -132,10 +135,22 @@ public class ShapeGeneratorScreen extends GuiBase {
             if (r == null) return;
             result = r;
             thumbnail.setResult(r);
-            BlockPos at = needOrigin || ShapePreview.currentOrigin() == null ? ShapePreview.originFor(s.spec()) : ShapePreview.currentOrigin();
-            needOrigin = false;
-            ShapePreview.show(r, at);
+            showGhost();
         });
+    }
+
+    /** The ghost's spot: a new one after the first preview and the Anchor toggle, else where Litematica's tools left it. */
+    private BlockPos origin() {
+        if (needOrigin || origin == null) origin = ShapePreview.originFor(settings().spec());
+        else if (ShapePreview.currentOrigin() != null) origin = ShapePreview.currentOrigin();
+        needOrigin = false;
+        return origin;
+    }
+
+    /** Puts the current result into the world, unless the ghost is off. */
+    private void showGhost() {
+        BlockPos at = origin();
+        if (ghost && result != null) ShapePreview.show(result, at);
     }
 
     // ---- widgets ----
@@ -149,7 +164,7 @@ public class ShapeGeneratorScreen extends GuiBase {
 
         int y = TOP;
         addLabel(LEFT, y + 6, 70, 10, WHITE, "Shape");
-        typeBox = new ShapeDropDown<>(LEFT + 72, y, 100, List.of(ShapeType.values()), t -> t.displayName);
+        typeBox = new ShapeDropDown<>(LEFT + 72, y, 100, List.of(ShapeType.values()), t -> t.displayName, h);
         typeBox.setSelectedEntry(type);
         addDropDown(typeBox);
         y += ROW;
@@ -201,6 +216,19 @@ public class ShapeGeneratorScreen extends GuiBase {
             anchor.setDisplayString(anchorLabel());
             changed();
         });
+        ButtonGeneric ghostButton = new ButtonGeneric(LEFT + 176, y, 70, 20, ghostLabel(),
+                "Shows the shape as a ghost in the world.", "Turn it off if the preview slows the game down.");
+        addButton(ghostButton, (b, mouse) -> {
+            ghost = !ghost;
+            ShapePresets.setGhost(ghost);
+            ghostButton.setDisplayString(ghostLabel());
+            if (ghost) {
+                showGhost();
+            } else {
+                origin();   // remember where it was before it goes
+                ShapePreview.clear();
+            }
+        });
 
         int by = outline.init(this, COL_B, TOP, COL_B_W);
         fill.init(this, COL_B, by + 4, COL_B_W);
@@ -219,6 +247,10 @@ public class ShapeGeneratorScreen extends GuiBase {
         } else {
             generate.setEnabled(blockError() == null);
         }
+    }
+
+    private String ghostLabel() {
+        return "Ghost: " + (ghost ? "On" : "Off");
     }
 
     private String anchorLabel() {
@@ -258,7 +290,7 @@ public class ShapeGeneratorScreen extends GuiBase {
         y += ROW;
         addLabel(LEFT, y + 6, 44, 10, WHITE, "Presets");
         List<String> names = ShapePresets.names();
-        presetBox = new ShapeDropDown<>(LEFT + 44, y, 110, names.isEmpty() ? List.of("(none)") : names, n -> n);
+        presetBox = new ShapeDropDown<>(LEFT + 44, y, 110, names.isEmpty() ? List.of("(none)") : names, n -> n, getScreenHeight());
         if (presetSelected != null) presetBox.setSelectedEntry(presetSelected);
         addDropDown(presetBox);
         GuiTextFieldGeneric presetField = new GuiTextFieldGeneric(LEFT + 164, y + 2, 90, 16, font);
@@ -389,8 +421,7 @@ public class ShapeGeneratorScreen extends GuiBase {
         } else if (Files.exists(ShapeSaver.fileFor(file)) && !isShiftDown()) {
             message = "File exists - hold Shift to overwrite";
         } else {
-            BlockPos at = ShapePreview.currentOrigin() != null ? ShapePreview.currentOrigin() : ShapePreview.originFor(settings().spec());
-            String failed = ShapeSaver.save(result, file, at, isShiftDown());
+            String failed = ShapeSaver.save(result, file, origin(), isShiftDown());
             if (failed == null) closeGui(true);
             else message = failed;
         }
@@ -426,10 +457,20 @@ public class ShapeGeneratorScreen extends GuiBase {
         }
     }
 
+    private ShapeDropDown<?> openDropDown() {
+        for (ShapeDropDown<?> d : dropDowns) if (d.opened()) return d;
+        return null;
+    }
+
     @Override
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         if (!peeking()) {
-            super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+            realMouseX = mouseX;
+            realMouseY = mouseY;
+            // the widgets under an open list get a mouse far away, so none of them highlights or shows a tooltip
+            ShapeDropDown<?> open = openDropDown();
+            boolean covered = open != null && open.isMouseOver(mouseX, mouseY);
+            super.extractRenderState(graphics, covered ? -10000 : mouseX, covered ? -10000 : mouseY, partialTick);
             return;
         }
         String hint = "Peek - release to return";
@@ -441,6 +482,8 @@ public class ShapeGeneratorScreen extends GuiBase {
     protected void drawContents(GuiContext ctx, int mouseX, int mouseY, float partialTick) {
         super.drawContents(ctx, mouseX, mouseY, partialTick);
         thumbnail.render(ctx, thumbX, thumbY, thumbW, thumbH, mouseX, mouseY);
+        outline.drawHint(ctx, this);
+        fill.drawHint(ctx, this);
 
         String text;
         int color = WHITE;
@@ -465,22 +508,35 @@ public class ShapeGeneratorScreen extends GuiBase {
     @Override
     protected void drawHoveredWidget(GuiContext ctx, int mouseX, int mouseY) {
         super.drawHoveredWidget(ctx, mouseX, mouseY);
-        outline.drawSuggestions(ctx, this, mouseX, mouseY);
-        fill.drawSuggestions(ctx, this, mouseX, mouseY);
+        outline.drawSuggestions(ctx, this, realMouseX, realMouseY);
+        fill.drawSuggestions(ctx, this, realMouseX, realMouseY);
+        ShapeDropDown<?> open = openDropDown();
+        if (open != null) {
+            ctx.nextStratum();
+            open.drawList(ctx, realMouseX, realMouseY);
+        } else {
+            outline.drawFieldTooltip(ctx, realMouseX, realMouseY);
+            fill.drawFieldTooltip(ctx, realMouseX, realMouseY);
+        }
     }
 
     @Override
     public boolean onMouseClicked(MouseButtonEvent event, boolean doubleClick) {
         if (peekKey) return true;
         int mx = (int) event.x(), my = (int) event.y();
-        // malilib hands clicks to buttons and fields before widgets: an open list must win over what it covers
+        // malilib hands clicks to buttons and fields before widgets: an open list gets them first, and a click
+        // outside it only closes it
+        ShapeDropDown<?> open = openDropDown();
+        if (open != null) {
+            if (open.isMouseOver(mx, my)) return open.onMouseClicked(event, doubleClick);
+            open.close();
+            return true;
+        }
         for (ShapeDropDown<?> d : dropDowns) {
             if (!d.isMouseOver(mx, my)) continue;
-            for (ShapeDropDown<?> other : dropDowns) if (other != d) other.close();
             for (GuiTextFieldGeneric f : fields) f.setFocusedWrapper(false);
             return d.onMouseClicked(event, doubleClick);
         }
-        for (ShapeDropDown<?> d : dropDowns) d.close();
         if (outline.clickSuggestion(mx, my) || fill.clickSuggestion(mx, my)) return true;
         if (event.button() == 0 && inThumbnail(event.x(), event.y()) && thumbnail.mouseClicked(event.x(), event.y(), 0)) {
             thumbDrag = true;
@@ -508,6 +564,11 @@ public class ShapeGeneratorScreen extends GuiBase {
 
     @Override
     public boolean onMouseScrolled(double mouseX, double mouseY, double horizontal, double vertical) {
+        ShapeDropDown<?> open = openDropDown();
+        if (open != null) {
+            if (open.isMouseOver((int) mouseX, (int) mouseY)) open.scroll(vertical);
+            return true;
+        }
         if (inThumbnail(mouseX, mouseY) && thumbnail.mouseScrolled(mouseX, mouseY, vertical)) return true;
         return super.onMouseScrolled(mouseX, mouseY, horizontal, vertical);
     }
