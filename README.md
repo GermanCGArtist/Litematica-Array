@@ -101,7 +101,9 @@ Pattern modes:
 - Drag the 3D view to orbit, scroll to zoom, **Reset view** to start over.
 - **Peek** (hold it, or hold `G` with no text field focused) hides the panel to show the ghost.
 
-- **Generate** writes `<name>.litematic` into Litematica's schematics folder, turns the ghost into a normal placement
+- **Folder** / **Browse...** picks the save folder: any subfolder of Litematica's schematics folder (**New folder** creates one).
+  The choice is remembered.
+- **Generate** writes `<name>.litematic` into that folder, turns the ghost into a normal placement
   and closes. An existing file blocks it; hold **Shift** to overwrite, which also removes placements that used the old file.
 - **Cancel** or Esc closes the screen and removes the ghost.
 - **Load** a preset, or type a name and **Save** the current settings; **Delete** needs Shift.

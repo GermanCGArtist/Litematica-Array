@@ -27,16 +27,17 @@ import java.util.function.Consumer;
  *
  *   Outline  [Mode          v]
  *   [stone or 60%a,40%b   ] [Hand]
- *   2+ blocks: stone,andesite      (grey, multi-block modes)
+ *   2+ blocks: stone,andesite      (grey, multi-block modes only)
  *   Cell X[ ] Y[ ] Z[ ]            (Checker, Brick)
  *   [Axis: Y] Width [ ][+-] [ ] Dither   (Stripes, Gradient, Diagonal)
  *   Seed [      ] [Dice]           (Mix)
  *
- * The editor keeps its own state (the screen asks slot() and error()) and survives the screen rebuilding its widgets.
+ * Its height is what the mode shows (2 rows, +10 for the grey line, +1 row for the mode's fields), so a screen can
+ * stack two editors without overlap. The editor keeps its own state (the screen asks slot() and error()) and survives the screen rebuilding its widgets.
  */
 final class BlockSlotEditor {
     private static final int RED = 0xFFFF5555, WHITE = 0xFFFFFFFF, GRAY = 0xFFAAAAAA;
-    private static final int ROW = 22, SUGGESTIONS = 6, SUGGESTION_H = 11;
+    private static final int HINT_H = 10, SUGGESTIONS = 6, SUGGESTION_H = 11;
     private static final String NAMESPACE = "minecraft:";
 
     private final String title;
@@ -131,13 +132,13 @@ final class BlockSlotEditor {
         textChanged(value);
     }
 
-    /** Adds the widgets at (x, y), w wide; returns the y below them. */
-    int init(ShapeGeneratorScreen g, int x, int y, int w) {
+    /** Adds the widgets at (x, y), w wide and rows of the given height; returns the y just below the last one. */
+    int init(ShapeGeneratorScreen g, int x, int y, int w, int row) {
         g.addLabel(x, y + 6, 52, 10, WHITE, title);
         modeBox = new ShapeDropDown<>(x + 52, y, 100, List.of(PatternMode.values()), m -> m.displayName, g.getScreenHeight());
         modeBox.setSelectedEntry(mode);
         g.addDropDown(modeBox);
-        y += ROW;
+        y += row;
 
         int handW = 40;
         blockField = new GuiTextFieldGeneric(x, y + 2, w - handW - 4, 16, g.font);
@@ -152,11 +153,12 @@ final class BlockSlotEditor {
         validate();
         g.addButton(new ButtonGeneric(x + w - handW, y, handW, 20, "Hand", "Use the block in your main hand",
                 multi() ? "Appends ,<block> to the list." : "Replaces the field."), (b, mouse) -> hand());
-        y += ROW;
-        if (multi()) {   // room for the grey syntax line under the field
+        y += row;
+        if (multi()) {   // its own line under the field (which ends 2 px above the next row), then the mode's row
             hintX = x;
-            hintY = y - 3;
-            y += 9;
+            hintY = y - 1;
+            g.placeText(hintX, hintY, listHint());
+            y += HINT_H;
         }
 
         switch (mode) {
@@ -164,10 +166,10 @@ final class BlockSlotEditor {
             case STRIPES, GRADIENT, DIAGONAL -> axisRow(g, x, y);
             case MIX -> seedRow(g, x, y);
             default -> {
-                return y + 4;
+                return y;
             }
         }
-        return y + ROW + 4;
+        return y + row;
     }
 
     private void cellRow(ShapeGeneratorScreen g, int x, int y) {

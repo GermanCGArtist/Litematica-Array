@@ -13,8 +13,12 @@ import fi.dy.masa.litematica.gui.Icons;
 import fi.dy.masa.malilib.gui.GuiBase;
 import fi.dy.masa.malilib.gui.GuiTextFieldGeneric;
 import fi.dy.masa.malilib.gui.GuiTextFieldInteger;
+import fi.dy.masa.malilib.gui.button.ButtonBase;
 import fi.dy.masa.malilib.gui.button.ButtonGeneric;
+import fi.dy.masa.malilib.gui.button.IButtonActionListener;
 import fi.dy.masa.malilib.gui.interfaces.ITextFieldListener;
+import fi.dy.masa.malilib.gui.widgets.WidgetBase;
+import fi.dy.masa.malilib.gui.widgets.WidgetLabel;
 import fi.dy.masa.malilib.gui.wrappers.TextFieldType;
 import fi.dy.masa.malilib.render.GuiContext;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -26,14 +30,16 @@ import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
 
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.IntConsumer;
 
 /**
  * The Shape Generator screen, opened from Litematica's main menu: controls on the left, the 3D thumbnail on the right,
- * name / presets / Generate at the bottom. Every change rebuilds the settings and asks PreviewWorker for a new preview
- * (thumbnail + ghost in the world). Peek (button held, or G held outside text fields) hides the panel to look at the ghost.
+ * name / folder / presets / Generate at the bottom. Every change rebuilds the settings and asks PreviewWorker for a new
+ * preview (thumbnail + ghost in the world). Peek (button held, or G held outside text fields) hides the panel to look
+ * at the ghost.
  *
  *   Shape Generator
  *   Shape [Box  v]      Outline [Single v]            +--------------+
@@ -41,18 +47,29 @@ import java.util.function.IntConsumer;
  *   Axis [Y]            Fill    [Single v]            |  3D preview  |
  *   Thickness [ ][+-]   [empty = hollow][Hand]        |              |
  *   (Param1/2 [ ][+-])                                +--------------+
- *   [Anchor: Corner]                                   [Reset view]
+ *   [Anchor: Corner][Ghost: On]                        [Reset view]
  *   Name [shape      ]
+ *   Folder [Browse...] (schematics)/walls
  *   Presets [v] [name] [Load] [Save] [Delete]
  *   [Generate] [Cancel] [Peek]
  *   status line
  *
+ * Layout: three columns computed once in initGui from the screen size, and no widget leaves its column: the left
+ * column (LEFT_W wide), the block editor column (EDIT_W) and the thumbnail, which takes what is left of the width (at
+ * least MIN_THUMB; the screen needs about 450 GUI pixels in width) and ends above the bottom rows. The bottom block
+ * (Name, Folder, Presets, buttons, status line) is anchored to the screen bottom and spans the columns. When the screen
+ * is short (GUI scale 4, 480x270) the rows shrink from 22 to 20 pixels and the title gap from 26 to 20, so both
+ * columns still end above the bottom block; each editor is as high as the fields its mode shows. After each initGui
+ * checkLayout() prints one line to the log if two widgets overlap.
+ *
  * Block fields, drop downs and rows are rebuilt by initGui when a shape or mode changes; the values live in the
- * screen's and the editors' fields, so a rebuild (or a window resize) loses nothing.
+ * screen's and the editors' fields, so a rebuild (or a window resize) loses nothing. Opening the folder picker keeps
+ * the generator running (preview, ghost); only really closing it runs removed()'s cleanup.
  */
 public class ShapeGeneratorScreen extends GuiBase {
     private static final int WHITE = 0xFFFFFFFF, RED = 0xFFFF5555, YELLOW = 0xFFFFFF55, GRAY = 0xFFAAAAAA;
-    private static final int LEFT = 20, TOP = 26, ROW = 22, COL_B = 204, COL_B_W = 200, THUMB_X = 420;
+    private static final int LEFT = 12, LEFT_W = 176, GAP = 8, EDIT_W = 190, MIN_THUMB = 40;
+    private static final int COL_B = LEFT + LEFT_W + GAP, THUMB_X = COL_B + EDIT_W + GAP;
 
     private ShapeType type;
     private int sizeX, sizeY, sizeZ, thickness, param1, param2;
@@ -75,6 +92,10 @@ public class ShapeGeneratorScreen extends GuiBase {
     private ShapeDropDown<ShapeType> typeBox;
     private ShapeDropDown<String> presetBox;
     private ButtonGeneric generate;
+    private int row = 22;
+    private Path folder = ShapeSaver.resolveFolder(ShapePresets.folder());
+    private boolean pickerOpen;   // the folder picker is on top: removed() must not clean up
+    private final List<Object> placed = new ArrayList<>();   // widgets and text rects for checkLayout()
     private int thumbX, thumbY, thumbW, thumbH;
     private boolean thumbDrag, peekButton, peekKey;
     private int realMouseX, realMouseY;
@@ -158,19 +179,24 @@ public class ShapeGeneratorScreen extends GuiBase {
     @Override
     public void initGui() {
         super.initGui();
+        pickerOpen = false;
         fields.clear();
         dropDowns.clear();
+        placed.clear();
         int w = getScreenWidth(), h = getScreenHeight();
+        row = h >= 320 ? 22 : 20;
+        int top = row == 22 ? 26 : 20;
+        int bottomY = h - 14 - 4 * row;   // first of the four bottom rows; the status line sits below them
 
-        int y = TOP;
+        int y = top;
         addLabel(LEFT, y + 6, 70, 10, WHITE, "Shape");
         typeBox = new ShapeDropDown<>(LEFT + 72, y, 100, List.of(ShapeType.values()), t -> t.displayName, h);
         typeBox.setSelectedEntry(type);
         addDropDown(typeBox);
-        y += ROW;
+        y += row;
 
         sizeRow(y);
-        y += ROW;
+        y += row;
 
         if (type.usesAxis()) {
             addLabel(LEFT, y + 6, 70, 10, WHITE, "Axis");
@@ -181,7 +207,7 @@ public class ShapeGeneratorScreen extends GuiBase {
                 initGui();
                 changed();
             });
-            y += ROW;
+            y += row;
         }
         if (type.usesThickness()) {
             addLabel(LEFT, y + 6, 70, 10, WHITE, "Thickness");
@@ -189,7 +215,7 @@ public class ShapeGeneratorScreen extends GuiBase {
                 thickness = v;
                 changed();
             }, "Outline thickness in blocks");
-            y += ROW;
+            y += row;
         }
         int min1 = type == ShapeType.CONE || type == ShapeType.PYRAMID ? 0 : 1;
         if (type.param1Label != null) {
@@ -198,7 +224,7 @@ public class ShapeGeneratorScreen extends GuiBase {
                 param1 = v;
                 changed();
             }, type.param1Label);
-            y += ROW;
+            y += row;
         }
         if (type.param2Label != null) {
             addLabel(LEFT, y + 6, 70, 10, WHITE, type.param2Label);
@@ -206,9 +232,10 @@ public class ShapeGeneratorScreen extends GuiBase {
                 param2 = v;
                 changed();
             }, type.param2Label);
-            y += ROW;
+            y += row;
         }
-        ButtonGeneric anchor = new ButtonGeneric(LEFT, y, 172, 20, anchorLabel(),
+        int anchorW = 100;
+        ButtonGeneric anchor = new ButtonGeneric(LEFT, y, anchorW, 20, anchorLabel(),
                 "Where the preview and the placement sit relative to you:", "the min corner of the shape or its center.");
         addButton(anchor, (b, mouse) -> {
             anchorCenter = !anchorCenter;
@@ -216,7 +243,7 @@ public class ShapeGeneratorScreen extends GuiBase {
             anchor.setDisplayString(anchorLabel());
             changed();
         });
-        ButtonGeneric ghostButton = new ButtonGeneric(LEFT + 176, y, 70, 20, ghostLabel(),
+        ButtonGeneric ghostButton = new ButtonGeneric(LEFT + anchorW + 4, y, LEFT_W - anchorW - 4, 20, ghostLabel(),
                 "Shows the shape as a ghost in the world.", "Turn it off if the preview slows the game down.");
         addButton(ghostButton, (b, mouse) -> {
             ghost = !ghost;
@@ -230,16 +257,17 @@ public class ShapeGeneratorScreen extends GuiBase {
             }
         });
 
-        int by = outline.init(this, COL_B, TOP, COL_B_W);
-        fill.init(this, COL_B, by + 4, COL_B_W);
+        int by = outline.init(this, COL_B, top, EDIT_W, row);
+        fill.init(this, COL_B, by + 4, EDIT_W, row);
 
-        bottomRows(h - 92);
+        bottomRows(bottomY);
 
         thumbX = THUMB_X;
-        thumbY = TOP;
-        thumbW = Math.max(60, w - LEFT - thumbX);
-        thumbH = Math.max(60, h - 52 - thumbY);
-        addButton(new ButtonGeneric(thumbX, h - 48, 80, 20, "Reset view"), (b, mouse) -> thumbnail.resetView());
+        thumbY = top;
+        thumbW = Math.max(MIN_THUMB, w - LEFT - thumbX);
+        int resetY = bottomY - 24;
+        thumbH = Math.max(MIN_THUMB, resetY - 4 - thumbY);
+        addButton(new ButtonGeneric(thumbX, resetY, Math.min(80, thumbW), 20, "Reset view"), (b, mouse) -> thumbnail.resetView());
 
         if (!started) {
             started = true;
@@ -247,6 +275,60 @@ public class ShapeGeneratorScreen extends GuiBase {
         } else {
             generate.setEnabled(blockError() == null);
         }
+        checkLayout();
+    }
+
+    // ---- layout self-check ----
+
+    @Override
+    public <T extends ButtonBase> T addButton(T button, IButtonActionListener listener) {
+        placed.add(button);
+        return super.addButton(button, listener);
+    }
+
+    @Override
+    public <T extends WidgetBase> T addWidget(T widget) {
+        placed.add(widget);
+        return super.addWidget(widget);
+    }
+
+    @Override
+    public WidgetLabel addLabel(int x, int y, int width, int height, int color, List<String> lines) {
+        WidgetLabel label = super.addLabel(x, y, width, height, color, lines);
+        placed.add(label);
+        return label;
+    }
+
+    /** Registers a drawn-only text (the grey hint line) for checkLayout(). */
+    void placeText(int x, int y, String text) {
+        placed.add(new int[] {x, y, getStringWidth(text), 9});
+    }
+
+    /** Prints one log line with the overlapping rectangles (x,y wxh), if any. Runs after every initGui. */
+    private void checkLayout() {
+        List<int[]> rects = new ArrayList<>();
+        for (Object o : placed) {
+            int[] r = switch (o) {
+                case WidgetBase b -> new int[] {b.getX(), b.getY(), b.getWidth(), b.getHeight()};
+                case GuiTextFieldGeneric f -> new int[] {f.getX(), f.getY(), f.getWidth(), f.getHeight()};
+                case int[] t -> t;
+                default -> null;
+            };
+            if (r != null && r[2] > 0 && r[3] > 0 && rects.stream().noneMatch(e -> e == r)) rects.add(r);
+        }
+        StringBuilder out = new StringBuilder();
+        int found = 0;
+        for (int i = 0; i < rects.size(); i++) {
+            for (int j = i + 1; j < rects.size(); j++) {
+                int[] a = rects.get(i), b = rects.get(j);
+                if (a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3] && found++ < 6) {
+                    out.append(" [").append(a[0]).append(',').append(a[1]).append(' ').append(a[2]).append('x').append(a[3])
+                            .append(" / ").append(b[0]).append(',').append(b[1]).append(' ').append(b[2]).append('x').append(b[3]).append(']');
+                }
+            }
+        }
+        if (found > 0) System.out.println("[SchematicArray] Shape Generator layout, " + found + " overlap(s) at "
+                + getScreenWidth() + "x" + getScreenHeight() + ":" + out);
     }
 
     private String ghostLabel() {
@@ -285,9 +367,16 @@ public class ShapeGeneratorScreen extends GuiBase {
             message = null;
             return false;
         }, TextFieldType.STRING);
-        addLabel(LEFT + 200, y + 6, 200, 10, GRAY, "File name of the schematic");
+        addLabel(LEFT + 200, y + 6, 160, 10, GRAY, "File name of the schematic");
 
-        y += ROW;
+        y += row;
+        addLabel(LEFT, y + 6, 44, 10, WHITE, "Folder");
+        addButton(new ButtonGeneric(LEFT + 44, y, 64, 20, "Browse...", "Choose the folder inside Litematica's",
+                "schematics folder to save into."), (b, mouse) -> browse());
+        int pathW = LEFT_W + GAP + EDIT_W - 112;
+        addLabel(LEFT + 112, y + 6, pathW, 10, WHITE, ellipsize(ShapeSaver.display(folder), pathW));
+
+        y += row;
         addLabel(LEFT, y + 6, 44, 10, WHITE, "Presets");
         List<String> names = ShapePresets.names();
         presetBox = new ShapeDropDown<>(LEFT + 44, y, 110, names.isEmpty() ? List.of("(none)") : names, n -> n, getScreenHeight());
@@ -306,7 +395,7 @@ public class ShapeGeneratorScreen extends GuiBase {
         addButton(new ButtonGeneric(LEFT + 346, y, 50, 20, "Delete", "Hold Shift to delete the selected preset."),
                 (b, mouse) -> deletePreset());
 
-        y += ROW;
+        y += row;
         generate = new ButtonGeneric(LEFT, y, 70, 20, "Generate", "Writes the schematic and places it.", "Hold Shift to overwrite an existing file.");
         addButton(generate, (b, mouse) -> generate());
         addButton(new ButtonGeneric(LEFT + 74, y, 60, 20, "Cancel"), (b, mouse) -> closeGui(true));
@@ -314,11 +403,28 @@ public class ShapeGeneratorScreen extends GuiBase {
                 (b, mouse) -> peekButton = true);
     }
 
+    /** Text shortened from the left ("...ls/castle") to fit width pixels. */
+    private String ellipsize(String text, int width) {
+        while (text.length() > 4 && getStringWidth(text) > width) text = "..." + text.substring(4);
+        return text;
+    }
+
+    /** Opens the folder picker on top; this screen keeps its state, the preview and the ghost meanwhile. */
+    private void browse() {
+        pickerOpen = true;
+        GuiBase.openGui(new FolderPickerScreen(this, ShapeSaver.root(), folder, picked -> {
+            folder = picked;
+            ShapePresets.setFolder(ShapeSaver.relative(picked));
+            message = null;
+        }));
+    }
+
     // ---- helpers the editors use too ----
 
     <T extends GuiTextFieldGeneric> T addField(T field, ITextFieldListener<T> listener, TextFieldType fieldType) {
         addTextField(field, listener, fieldType);
         fields.add(field);
+        placed.add(field);
         return field;
     }
 
@@ -418,10 +524,10 @@ public class ShapeGeneratorScreen extends GuiBase {
             message = "Type a file name first";
         } else if (result == null || PreviewWorker.busy()) {
             message = "Wait for the preview to finish";
-        } else if (Files.exists(ShapeSaver.fileFor(file)) && !isShiftDown()) {
+        } else if (Files.exists(ShapeSaver.fileFor(folder, file)) && !isShiftDown()) {
             message = "File exists - hold Shift to overwrite";
         } else {
-            String failed = ShapeSaver.save(result, file, origin(), isShiftDown());
+            String failed = ShapeSaver.save(result, folder, file, origin(), isShiftDown());
             if (failed == null) closeGui(true);
             else message = failed;
         }
@@ -596,10 +702,14 @@ public class ShapeGeneratorScreen extends GuiBase {
         return super.keyReleased(event);
     }
 
-    /** Closing in any way (Cancel, Esc, Generate, leaving the world): stop the worker, remember the settings, drop the ghost. */
+    /**
+     * Closing in any way (Cancel, Esc, Generate, leaving the world): stop the worker, remember the settings, drop the
+     * ghost. Not when the folder picker opens on top of this screen, which also ends in removed().
+     */
     @Override
     public void removed() {
         super.removed();
+        if (pickerOpen) return;
         PreviewWorker.cancel();
         ShapePresets.setLast(settings());
         ShapePreview.clear();

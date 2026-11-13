@@ -24,7 +24,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Last settings and named presets in config/schemarray/shapes.json: {"last": settings, "ghost": bool, "presets": {name: settings}}.
+ * Last settings and named presets in config/schemarray/shapes.json: {"last": settings, "ghost": bool, "folder": "sub/dir", "presets": {name: settings}}.
  * The records are mapped to JSON by hand and read back tolerantly: a missing or broken field falls back to its
  * default, so an old or hand-edited file never loses the rest.
  */
@@ -35,6 +35,7 @@ public final class ShapePresets {
     private static boolean loaded;
     private static GeneratorSettings last = GeneratorSettings.defaults();
     private static boolean ghost = true;
+    private static String folder = "";
     private static final Map<String, GeneratorSettings> PRESETS = new LinkedHashMap<>();
 
     private static Path file() {
@@ -52,6 +53,7 @@ public final class ShapePresets {
             JsonObject o = root.getAsJsonObject();
             if (o.get("last") instanceof JsonObject l) last = readSettings(l);
             ghost = bool(o, "ghost", true);
+            folder = str(o, "folder", "");
             if (o.get("presets") instanceof JsonObject p) {
                 for (var e : p.entrySet()) if (e.getValue() instanceof JsonObject s) PRESETS.put(e.getKey(), readSettings(s));
             }
@@ -65,6 +67,7 @@ public final class ShapePresets {
         JsonObject root = new JsonObject();
         root.add("last", writeSettings(last));
         root.addProperty("ghost", ghost);
+        root.addProperty("folder", folder);
         JsonObject presets = new JsonObject();
         for (var e : PRESETS.entrySet()) presets.add(e.getKey(), writeSettings(e.getValue()));
         root.add("presets", presets);
@@ -99,6 +102,18 @@ public final class ShapePresets {
     public static void setGhost(boolean on) {
         load();
         ghost = on;
+        save();
+    }
+
+    /** The save folder relative to the schematics folder, "/" separated; "" = the schematics folder itself. */
+    public static String folder() {
+        load();
+        return folder;
+    }
+
+    public static void setFolder(String relative) {
+        load();
+        folder = relative;
         save();
     }
 
