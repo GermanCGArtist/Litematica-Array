@@ -1,5 +1,8 @@
 package dev.schemarray;
 
+import dev.schemarray.api.FolderActionContext;
+import dev.schemarray.api.ListEntry;
+import dev.schemarray.api.SchematicArrayApi;
 import fi.dy.masa.litematica.gui.Icons;
 import fi.dy.masa.malilib.gui.GuiBase;
 import fi.dy.masa.malilib.gui.GuiTextInput;
@@ -10,9 +13,12 @@ import fi.dy.masa.malilib.render.RenderUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.input.MouseButtonEvent;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * A folder row in Litematica's placement list: open/closed arrow, name and count, and on the right the buttons
- * Visible/Hidden, +, Rename and Delete. A click anywhere else on the row opens or closes the folder (see DragDrop: it is done on release, so the row can also be dragged).
+ * [buttons of other mods], Visible/Hidden, +, Rename and Delete. A click anywhere else on the row opens or closes the folder (see DragDrop: it is done on release, so the row can also be dragged).
  */
 public final class WidgetFolderRow extends WidgetListEntryBase<Folders.Node> {
     private final boolean isOdd;
@@ -21,6 +27,7 @@ public final class WidgetFolderRow extends WidgetListEntryBase<Folders.Node> {
         super(x, y, width, height, node, listIndex);
         this.isOdd = isOdd;
         int bx = x + width - 2, by = y + 1;
+        List<SchematicArrayApi.FolderAction> actions = SchematicArrayApi.folderActions();
 
         ButtonGeneric del = new ButtonGeneric(bx, by, -1, true, "Delete");
         del.setHoverStrings("Hold Shift and click to delete the folder.", "Its placements and subfolders move up; no placement is removed.");
@@ -52,6 +59,24 @@ public final class WidgetFolderRow extends WidgetListEntryBase<Folders.Node> {
             Folders.toggleHidden(node.id);
             ListRefresh.later();
         });
+        bx = vis.getX() - 1;
+
+        for (SchematicArrayApi.FolderAction fa : actions) {
+            ButtonGeneric b = new ButtonGeneric(bx, by, -1, true, fa.label());
+            if (fa.hover() != null) b.setHoverStrings(fa.hover());
+            addButton(b, (btn, mouse) -> runFolderAction(fa, node));
+            bx = b.getX() - 1;
+        }
+    }
+
+    private static void runFolderAction(SchematicArrayApi.FolderAction fa, Folders.Node node) {
+        try {
+            List<String> ids = new ArrayList<>();
+            for (ListEntry e : Folders.entriesIn(node.id, SchematicArrayApi.allEntries())) ids.add(e.id());
+            fa.action().accept(new FolderActionContext(node.id, node.name, List.copyOf(ids)));
+        } catch (Throwable t) {
+            System.out.println("[SchematicArray] folder action '" + fa.label() + "' failed: " + t);
+        }
     }
 
     @Override
