@@ -1,5 +1,6 @@
 package dev.schemarray;
 
+import dev.schemarray.api.ListEntry;
 import fi.dy.masa.litematica.schematic.placement.SchematicPlacement;
 import fi.dy.masa.malilib.gui.widgets.WidgetListBase;
 import fi.dy.masa.malilib.gui.widgets.WidgetListEntryBase;
@@ -27,7 +28,7 @@ public final class ColorMenu {
     private static int x, y, w;
     private static String subtitle;
     private static String folderId;                       // set: a folder row
-    private static List<SchematicPlacement> placements;   // else: these placements
+    private static List<Object> placements;   // else: these placements / entries
     private static int current;
 
     public static boolean isOpen() {
@@ -51,14 +52,15 @@ public final class ColorMenu {
             folderId = n.id;
             current = n.color;
             subtitle = n.name;
-        } else if (entry instanceof SchematicPlacement p) {
+        } else if (entry instanceof SchematicPlacement || entry instanceof ListEntry) {
+            Object p = entry;
             placements = new ArrayList<>();
             if (DragDrop.selection().contains(p)) {
-                for (SchematicPlacement q : DragDrop.selection()) if (!ArraySync.isCopy(q)) placements.add(q);
+                for (Object q : DragDrop.selection()) if (!(q instanceof SchematicPlacement sp && ArraySync.isCopy(sp))) placements.add(q);
             }
             if (placements.isEmpty()) placements.add(p);
             current = Folders.ownColor(p);
-            subtitle = placements.size() == 1 ? p.getName() : placements.size() + " placements";
+            subtitle = placements.size() == 1 ? Folders.nameOf(p) : placements.size() + " rows";
         } else {
             return false;
         }
