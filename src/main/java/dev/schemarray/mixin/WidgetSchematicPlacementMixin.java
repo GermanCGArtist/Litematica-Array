@@ -30,9 +30,9 @@ abstract class WidgetSchematicPlacementMixin {
         ButtonGeneric move = new ButtonGeneric(w.buttonsStartX, w.getY() + 1, -1, true, "Move");
         ((WidgetContainerAccessor) w).schemarray$addButton(move, (b, mouse) -> {
             // a row that is part of the selection moves the whole selection
-            List<SchematicPlacement> moving = new ArrayList<>();
+            List<Object> moving = new ArrayList<>();
             if (DragDrop.selection().contains(w.placement)) {
-                for (SchematicPlacement p : DragDrop.selection()) if (!ArraySync.isCopy(p)) moving.add(p);
+                for (Object p : DragDrop.selection()) if (!(p instanceof SchematicPlacement sp && ArraySync.isCopy(sp))) moving.add(p);
             }
             if (moving.isEmpty()) moving.add(w.placement);
             GuiBase.openGui(new MoveScreen(Compat.screen(), moving));

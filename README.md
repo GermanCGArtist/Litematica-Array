@@ -109,6 +109,24 @@ Pattern modes:
 - **Load** a preset, or type a name and **Save** the current settings; **Delete** needs Shift.
 - Presets and your last settings are kept in `config/schemarray/shapes.json`; the last settings return when you reopen the screen.
 
+## For other mods
+
+The package `dev.schemarray.api` (mod id `schemarray`, `SchematicArrayApi.API_VERSION` = 1) lets another mod add to
+Litematica Array. Call everything from the client thread.
+
+- `SchematicArrayApi.registerListEntries(ListEntryProvider)`: your `ListEntry` rows appear in Litematica's placement
+  list, mixed with the placements, sorted by name, and can sit in folders, be colored, multi-selected and dragged like
+  placement rows. An entry has a stable `id()` ("modid:..."), a `name()`, a `createWidget(...)` (x and width already
+  include the folder indent), `searchStrings()` for the search bar and `isRenderingEnabled()` / `setRenderingEnabled()`,
+  which a hidden folder uses. Array copies, the configuration screen and Litematica's own row buttons stay
+  placement-only.
+- Folder data for entries is stored under `id()` in `config/schemarray/folders.json`, next to the placements'.
+  `folderOf(id)`, `colorOf(id)` (ARGB, 0 = none) and `selectedEntryIds()` read it; `refreshList()` rebuilds the list.
+- `SchematicArrayApi.registerShapeAction(label, hover, action)`: adds a button to the Shape Generator screen. The action
+  gets a `ShapeActionContext` with the generated `VoxelResult`, the name field's text and the preview's origin.
+
+Compile against the jar and depend on `schemarray`; check `API_VERSION` if you need to.
+
 ## Install
 
 Download the jar for your Minecraft version from [Releases](https://github.com/GermanCGArtist/Litematica-Array/releases)
