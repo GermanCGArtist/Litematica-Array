@@ -194,6 +194,29 @@ public final class Folders {
         return ids;
     }
 
+    /** The name of the folder, or null if it does not exist. */
+    public static String folderName(String id) {
+        Folder f = id == null ? null : data().folders.get(id);
+        return f == null ? null : f.name;
+    }
+
+    /** The entries (of other mods) in the folder and all its subfolders, in list order: subfolders (by name) first, then own entries by name. */
+    public static List<ListEntry> entriesIn(String folder, Collection<ListEntry> all) {
+        Map<String, List<ListEntry>> byFolder = new LinkedHashMap<>();
+        for (ListEntry e : all) byFolder.computeIfAbsent(folderOf(e.id()), k -> new ArrayList<>()).add(e);
+        List<ListEntry> out = new ArrayList<>();
+        collectEntries(folder, byFolder, out, new HashSet<>());
+        return out;
+    }
+
+    private static void collectEntries(String folder, Map<String, List<ListEntry>> byFolder, List<ListEntry> out, Set<String> seen) {
+        if (!seen.add(folder)) return;
+        for (String c : childFolders(folder)) collectEntries(c, byFolder, out, seen);
+        List<ListEntry> own = new ArrayList<>(byFolder.getOrDefault(folder, List.of()));
+        own.sort(Comparator.comparing(e -> e.name().toLowerCase()));
+        out.addAll(own);
+    }
+
     /** Every folder as a tree, open or not (for the Move screen). */
     public static List<Node> tree() {
         List<Node> out = new ArrayList<>();
