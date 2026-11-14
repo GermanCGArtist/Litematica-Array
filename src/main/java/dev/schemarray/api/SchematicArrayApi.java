@@ -20,8 +20,12 @@ public final class SchematicArrayApi {
     /** A button on the Shape Generator screen next to the save controls. */
     public record ShapeAction(String label, String hover, Consumer<ShapeActionContext> action) {}
 
+    /** A button on every folder row of the placement list, left of Visible/Hidden. */
+    public record FolderAction(String label, String hover, Consumer<FolderActionContext> action) {}
+
     private static final List<ListEntryProvider> PROVIDERS = new CopyOnWriteArrayList<>();
     private static final List<ShapeAction> SHAPE_ACTIONS = new CopyOnWriteArrayList<>();
+    private static final List<FolderAction> FOLDER_ACTIONS = new CopyOnWriteArrayList<>();
 
     /** Adds the provider's entries to the placement list (mixed with the placements, in folders, sorted by name). */
     public static void registerListEntries(ListEntryProvider provider) {
@@ -31,6 +35,11 @@ public final class SchematicArrayApi {
     /** Adds one button to the Shape Generator screen; it gets the generated shape when clicked. */
     public static void registerShapeAction(String buttonLabel, String hoverText, Consumer<ShapeActionContext> action) {
         if (buttonLabel != null && action != null) SHAPE_ACTIONS.add(new ShapeAction(buttonLabel, hoverText, action));
+    }
+
+    /** Adds one button to every folder row; it gets the folder and the ids of the entries inside (subfolders included). */
+    public static void registerFolderAction(String buttonLabel, String hoverText, Consumer<FolderActionContext> action) {
+        if (buttonLabel != null && action != null) FOLDER_ACTIONS.add(new FolderAction(buttonLabel, hoverText, action));
     }
 
     /** Rebuilds the placement list on the next tick (call after your entries changed). */
@@ -75,5 +84,9 @@ public final class SchematicArrayApi {
 
     public static List<ShapeAction> shapeActions() {
         return SHAPE_ACTIONS;
+    }
+
+    public static List<FolderAction> folderActions() {
+        return FOLDER_ACTIONS;
     }
 }
