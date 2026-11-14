@@ -2,6 +2,8 @@ package dev.schemarray;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import dev.schemarray.api.ListEntry;
+import dev.schemarray.api.SchematicArrayApi;
 import dev.schemarray.shape.mc.ShapePreview;
 import fi.dy.masa.litematica.data.DataManager;
 import fi.dy.masa.litematica.schematic.placement.SchematicPlacement;
@@ -30,6 +32,10 @@ import java.util.UUID;
  * at most one folder, keyed by its hash id like the arrays. A hidden folder switches the rendering of everything
  * inside it off; the placements it switched off itself are remembered, so ones the user had switched off stay off
  * when the folder is shown again. Saved in config/schemarray/folders.json.
+ *
+ * The list also holds entries of other mods (ListEntry, see SchematicArrayApi). A row item is either a
+ * SchematicPlacement or a ListEntry; both are keyed by a string id (the placement's hash id, the entry's id()) in the
+ * same maps, so everything here works on both.
  */
 public final class Folders {
     private Folders() {}
@@ -72,7 +78,25 @@ public final class Folders {
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static Data data;
-    private static final Map<SchematicPlacement, Integer> DEPTH = new IdentityHashMap<>();
+    private static final Map<Object, Integer> DEPTH = new IdentityHashMap<>();
+
+    /** The key of a list row item in the folder maps: the placement's hash id or the entry's id; null for anything else. */
+    public static String idOf(Object item) {
+        if (item instanceof SchematicPlacement p) return p.getHashId().toString();
+        if (item instanceof ListEntry e) return e.id();
+        return null;
+    }
+
+    public static String nameOf(Object item) {
+        if (item instanceof SchematicPlacement p) return p.getName();
+        if (item instanceof ListEntry e) return e.name();
+        return "";
+    }
+
+    /** Array copies never get folders or colors of their own. */
+    private static boolean isCopy(Object item) {
+        return item instanceof SchematicPlacement p && ArraySync.isCopy(p);
+    }
 
     private static Path file() {
         return FabricLoader.getInstance().getConfigDir().resolve("schemarray").resolve("folders.json");
@@ -116,45 +140,47 @@ public final class Folders {
         return f.parent != null && data().folders.containsKey(f.parent) ? f.parent : null;
     }
 
-    private static String folderOf(String placementId) {
-        String id = data().placements.get(placementId);
+    /** Where the item with this id sits: its folder id, null = top level. */
+    public static String folderOf(String itemId) {
+        String id = data().placements.get(itemId);
         return id != null && data().folders.containsKey(id) ? id : null;
     }
 
     /** Where the placement sits: its folder id, null = top level. */
-    public static String folderOf(SchematicPlacement p) {
-        return folderOf(p.getHashId().toString());
+    public static String folderOf(Object item) {
+        String id = idOf(item);
+        return id == null ? null : folderOf(id);
     }
 
     /**
-     * The rows of the list: per level the folders (by name) first, then the placements (by name); only the contents of
-     * open folders. Also fills the depth the placement rows are indented with.
+     * The rows of the list: per level the folders (by name) first, then the items (placements and entries, by name);
+     * only the contents of open folders. Also fills the depth the item rows are indented with.
      */
-    public static List<Object> rows(Collection<SchematicPlacement> placements) {
+    public static List<Object> rows(Collection<?> items) {
         DEPTH.clear();
-        Map<String, List<SchematicPlacement>> byFolder = new LinkedHashMap<>();
-        for (SchematicPlacement p : placements) byFolder.computeIfAbsent(folderOf(p), k -> new ArrayList<>()).add(p);
+        Map<String, List<Object>> byFolder = new LinkedHashMap<>();
+        for (Object p : items) byFolder.computeIfAbsent(folderOf(p), k -> new ArrayList<>()).add(p);
         List<Object> out = new ArrayList<>();
         addLevel(null, 0, byFolder, out, new HashSet<>());
         return out;
     }
 
-    private static void addLevel(String folder, int depth, Map<String, List<SchematicPlacement>> byFolder, List<Object> out, Set<String> seen) {
+    private static void addLevel(String folder, int depth, Map<String, List<Object>> byFolder, List<Object> out, Set<String> seen) {
         for (String id : childFolders(folder)) {
             if (!seen.add(id)) continue;
             Folder f = data().folders.get(id);
             out.add(new Node(id, f, depth, count(id, byFolder, new HashSet<>())));
             if (f.open) addLevel(id, depth + 1, byFolder, out, seen);
         }
-        List<SchematicPlacement> own = new ArrayList<>(byFolder.getOrDefault(folder, List.of()));
-        own.sort(Comparator.comparing(p -> p.getName().toLowerCase()));
-        for (SchematicPlacement p : own) {
+        List<Object> own = new ArrayList<>(byFolder.getOrDefault(folder, List.of()));
+        own.sort(Comparator.comparing(p -> nameOf(p).toLowerCase()));
+        for (Object p : own) {
             DEPTH.put(p, depth);
             out.add(p);
         }
     }
 
-    private static int count(String folder, Map<String, List<SchematicPlacement>> byFolder, Set<String> seen) {
+    private static int count(String folder, Map<String, List<Object>> byFolder, Set<String> seen) {
         if (!seen.add(folder)) return 0;
         int n = byFolder.getOrDefault(folder, List.of()).size();
         for (String c : childFolders(folder)) n += count(c, byFolder, seen);
@@ -183,8 +209,8 @@ public final class Folders {
         }
     }
 
-    /** How many levels the placement's row is indented. */
-    public static int depthOf(SchematicPlacement p) {
+    /** How many levels the item's row is indented. */
+    public static int depthOf(Object p) {
         return DEPTH.getOrDefault(p, 0);
     }
 
@@ -234,10 +260,10 @@ public final class Folders {
         save();
     }
 
-    /** Puts the placement into the folder (null = top level). Array copies are never put in a folder. */
-    public static void move(SchematicPlacement p, String folder) {
-        if (ArraySync.isCopy(p)) return;
-        String id = p.getHashId().toString();
+    /** Puts the item into the folder (null = top level). Array copies are never put in a folder. */
+    public static void move(Object p, String folder) {
+        String id = idOf(p);
+        if (id == null || isCopy(p)) return;
         if (folder == null || !data().folders.containsKey(folder)) data().placements.remove(id);
         else data().placements.put(id, folder);
         save();
@@ -255,15 +281,17 @@ public final class Folders {
         save();
     }
 
-    /** The placement's own color, -1 = none. */
-    public static int ownColor(SchematicPlacement p) {
-        Integer c = data().placementColors.get(p.getHashId().toString());
+    /** The item's own color, -1 = none. */
+    public static int ownColor(Object p) {
+        String id = idOf(p);
+        Integer c = id == null ? null : data().placementColors.get(id);
         return c == null || c < 0 || c >= COLORS.length ? -1 : c;
     }
 
-    public static void setPlacementColors(Collection<SchematicPlacement> placements, int color) {
-        for (SchematicPlacement p : placements) {
-            String id = p.getHashId().toString();
+    public static void setPlacementColors(Collection<?> items, int color) {
+        for (Object p : items) {
+            String id = idOf(p);
+            if (id == null) continue;
             if (color < 0) data().placementColors.remove(id);
             else data().placementColors.put(id, color);
         }
@@ -271,11 +299,16 @@ public final class Folders {
     }
 
     /** The color the row shows: its own, else that of the nearest colored folder above it, else -1. */
-    public static int effectiveColor(SchematicPlacement p) {
-        int own = ownColor(p);
-        if (own >= 0) return own;
+    public static int effectiveColor(Object p) {
+        String id = idOf(p);
+        return id == null ? -1 : effectiveColorOfId(id);
+    }
+
+    public static int effectiveColorOfId(String id) {
+        Integer c = data().placementColors.get(id);
+        if (c != null && c >= 0 && c < COLORS.length) return c;
         Set<String> seen = new HashSet<>();
-        String folder = folderOf(p);
+        String folder = folderOf(id);
         while (folder != null && seen.add(folder)) {
             Folder f = data().folders.get(folder);
             if (f == null) return -1;
@@ -308,12 +341,12 @@ public final class Folders {
         return true;
     }
 
-    /** Puts all the placements into the folder (null = top level), opens that folder and saves once. */
-    public static void moveAll(Collection<SchematicPlacement> placements, String folder) {
+    /** Puts all the items into the folder (null = top level), opens that folder and saves once. */
+    public static void moveAll(Collection<?> items, String folder) {
         boolean top = folder == null || !data().folders.containsKey(folder);
-        for (SchematicPlacement p : placements) {
-            if (ArraySync.isCopy(p)) continue;
-            String id = p.getHashId().toString();
+        for (Object p : items) {
+            String id = idOf(p);
+            if (id == null || isCopy(p)) continue;
             if (top) data().placements.remove(id);
             else data().placements.put(id, folder);
         }
@@ -332,27 +365,36 @@ public final class Folders {
         return false;
     }
 
-    /** Every tick: switches the rendering of placements in hidden folders off, and back on when the folder is shown. */
+    /** Every tick: switches the rendering of placements and entries in hidden folders off, and back on when the folder is shown. */
     public static void tick(Minecraft mc) {
         if (mc.level == null) return;
         Data d = data();
         if (d.folders.isEmpty() && d.hiddenByFolder.isEmpty()) return;
         boolean changed = false;
-        for (SchematicPlacement p : DataManager.getSchematicPlacementManager().getAllSchematicsPlacements()) {
-            if (ArraySync.isCopy(p) || ShapePreview.isPreview(p)) continue;
-            String id = p.getHashId().toString();
+        List<Object> items = new ArrayList<>(DataManager.getSchematicPlacementManager().getAllSchematicsPlacements());
+        items.addAll(SchematicArrayApi.allEntries());
+        for (Object item : items) {
+            if (isCopy(item) || (item instanceof SchematicPlacement p && ShapePreview.isPreview(p))) continue;
+            String id = idOf(item);
+            if (id == null) continue;
+            boolean on = item instanceof SchematicPlacement p ? p.isRenderingEnabled() : ((ListEntry) item).isRenderingEnabled();
             if (hidden(folderOf(id))) {
-                if (p.isRenderingEnabled()) {
-                    p.setRenderSchematic(false);
+                if (on) {
+                    setRendering(item, false);
                     d.hiddenByFolder.add(id);
                     changed = true;
                 }
             } else if (d.hiddenByFolder.contains(id)) {
-                p.setRenderSchematic(true);
+                setRendering(item, true);
                 d.hiddenByFolder.remove(id);
                 changed = true;
             }
         }
         if (changed) save();
+    }
+
+    private static void setRendering(Object item, boolean on) {
+        if (item instanceof SchematicPlacement p) p.setRenderSchematic(on);
+        else if (item instanceof ListEntry e) e.setRenderingEnabled(on);
     }
 }

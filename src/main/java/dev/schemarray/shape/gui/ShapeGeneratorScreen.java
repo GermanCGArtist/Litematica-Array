@@ -1,5 +1,7 @@
 package dev.schemarray.shape.gui;
 
+import dev.schemarray.api.SchematicArrayApi;
+import dev.schemarray.api.ShapeActionContext;
 import dev.schemarray.shape.Axis;
 import dev.schemarray.shape.GeneratorSettings;
 import dev.schemarray.shape.ShapeSpec;
@@ -401,6 +403,30 @@ public class ShapeGeneratorScreen extends GuiBase {
         addButton(new ButtonGeneric(LEFT + 74, y, 60, 20, "Cancel"), (b, mouse) -> closeGui(true));
         addButton(new ButtonGeneric(LEFT + 138, y, 60, 20, "Peek", "Hold to hide this panel and look at the preview", "in the world (or hold G)."),
                 (b, mouse) -> peekButton = true);
+
+        // buttons that other mods registered (SchematicArrayApi.registerShapeAction), right of Peek
+        int ax = LEFT + 202;
+        for (SchematicArrayApi.ShapeAction a : SchematicArrayApi.shapeActions()) {
+            int w = getStringWidth(a.label()) + 14;
+            ButtonGeneric b = a.hover() == null ? new ButtonGeneric(ax, y, w, 20, a.label())
+                    : new ButtonGeneric(ax, y, w, 20, a.label(), a.hover());
+            addButton(b, (btn, mouse) -> runShapeAction(a));
+            ax += w + 4;
+        }
+    }
+
+    /** Calls a registered shape action with the current preview (name field, origin of the ghost). */
+    private void runShapeAction(SchematicArrayApi.ShapeAction a) {
+        if (result == null || PreviewWorker.busy()) {
+            message = "Wait for the preview to finish";
+            return;
+        }
+        try {
+            a.action().accept(new ShapeActionContext(result, name == null ? "" : name.trim(), origin()));
+        } catch (Throwable t) {
+            message = a.label() + " failed: " + t.getMessage();
+            System.out.println("[SchematicArray] shape action failed: " + t);
+        }
     }
 
     /** Text shortened from the left ("...ls/castle") to fit width pixels. */

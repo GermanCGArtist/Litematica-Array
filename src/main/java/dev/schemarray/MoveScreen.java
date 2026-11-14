@@ -1,6 +1,5 @@
 package dev.schemarray;
 
-import fi.dy.masa.litematica.schematic.placement.SchematicPlacement;
 import fi.dy.masa.malilib.gui.GuiBase;
 import fi.dy.masa.malilib.gui.button.ButtonGeneric;
 import net.minecraft.client.Minecraft;
@@ -12,14 +11,14 @@ import java.util.Objects;
 
 /** Small screen to pick the folder for a placement (or several): "(top level)" and every folder as an indented tree. */
 public final class MoveScreen extends GuiBase {
-    private final List<SchematicPlacement> placements;
+    private final List<Object> placements;   // SchematicPlacements and ListEntries
     private final Screen back;
 
-    public MoveScreen(Screen back, List<SchematicPlacement> placements) {
+    public MoveScreen(Screen back, List<Object> placements) {
         this.back = back;
         this.placements = List.copyOf(placements);
         setParent(back);
-        setTitle("Move " + (placements.size() == 1 ? placements.get(0).getName() : placements.size() + " placements") + " to");
+        setTitle("Move " + (placements.size() == 1 ? Folders.nameOf(placements.get(0)) : placements.size() + " rows") + " to");
     }
 
     @Override
@@ -28,7 +27,7 @@ public final class MoveScreen extends GuiBase {
         var font = Minecraft.getInstance().font;
         // the folder they are all in (nothing is marked if they are in different ones)
         String current = Folders.folderOf(placements.get(0));
-        for (SchematicPlacement p : placements) if (!Objects.equals(Folders.folderOf(p), current)) current = "<mixed>";
+        for (Object p : placements) if (!Objects.equals(Folders.folderOf(p), current)) current = "<mixed>";
         List<Folders.Node> rows = new ArrayList<>();
         rows.add(null);   // (top level)
         rows.addAll(Folders.tree());
