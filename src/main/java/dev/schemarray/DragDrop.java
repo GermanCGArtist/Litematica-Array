@@ -2,6 +2,7 @@ package dev.schemarray;
 
 import dev.schemarray.mixin.WidgetContainerAccessor;
 import dev.schemarray.mixin.WidgetListBaseAccessor;
+import dev.schemarray.api.ListEntry;
 import fi.dy.masa.litematica.data.DataManager;
 import fi.dy.masa.litematica.schematic.placement.SchematicPlacement;
 import fi.dy.masa.malilib.gui.GuiBase;
@@ -41,20 +42,21 @@ public final class DragDrop {
     private static final int OK_COLOR = 0xFF80C0FF;
     private static final int BAD_COLOR = 0xFFC04040;
 
-    private static final Set<SchematicPlacement> SELECTION = new LinkedHashSet<>();
-    private static SchematicPlacement anchor;
+    private static final Set<Object> SELECTION = new LinkedHashSet<>();
+    private static Object anchor;
 
     private static WidgetListBase<?, ?> pressList;
     private static boolean pressed, dragging, deferred;
     private static double startX, startY;
-    private static SchematicPlacement pressPlacement;
+    private static Object pressPlacement;   // a SchematicPlacement or a ListEntry
     private static String pressFolder, pressFolderName;
-    private static List<SchematicPlacement> dragPlacements = List.of();
+    private static List<Object> dragPlacements = List.of();
     private static long lastScroll;
 
     private record Target(boolean valid, boolean inZone, String folder) {}
 
-    public static Set<SchematicPlacement> selection() {
+    /** The selected rows: SchematicPlacements and ListEntries. */
+    public static Set<Object> selection() {
         return SELECTION;
     }
 
@@ -89,8 +91,8 @@ public final class DragDrop {
         WidgetListEntryBase<?> row = rowAt(list, mx, my);
         if (row == null) return null;
         Object entry = row.getEntry();
-        if (!(entry instanceof Folders.Node) && !(entry instanceof SchematicPlacement)) return null;
-        if (entry instanceof SchematicPlacement && !row.canSelectAt(e)) return null;   // the button area of the row
+        if (!(entry instanceof Folders.Node) && !isItem(entry)) return null;
+        if (isItem(entry) && !row.canSelectAt(e)) return null;   // the button area of the row
         for (WidgetBase w : ((WidgetContainerAccessor) row).schemarray$subWidgets()) {
             if (w instanceof ButtonBase && w.isMouseOver(mx, my)) return null;
         }
@@ -116,7 +118,7 @@ public final class DragDrop {
             return true;
         }
 
-        SchematicPlacement p = (SchematicPlacement) entry;
+        Object p = entry;
         pressPlacement = p;
         boolean ctrl = GuiBase.isCtrlDown(), shift = GuiBase.isShiftDown();
         var manager = DataManager.getSchematicPlacementManager();
@@ -125,13 +127,13 @@ public final class DragDrop {
         if (shift && from >= 0 && to >= 0) {
             if (!ctrl) SELECTION.clear();
             for (int i = Math.min(from, to); i <= Math.max(from, to); i++) {
-                if (rows.get(i) instanceof SchematicPlacement q) SELECTION.add(q);   // folder rows are skipped
+                if (isItem(rows.get(i))) SELECTION.add(rows.get(i));   // folder rows are skipped
             }
-            manager.setSelectedSchematicPlacement(p);
+            setCurrent(p);
         } else if (ctrl) {
             if (!SELECTION.remove(p)) {
                 SELECTION.add(p);
-                manager.setSelectedSchematicPlacement(p);
+                setCurrent(p);
             } else if (manager.getSelectedSchematicPlacement() == p) {
                 manager.setSelectedSchematicPlacement(null);
             }
@@ -142,9 +144,19 @@ public final class DragDrop {
             SELECTION.clear();
             SELECTION.add(p);
             anchor = p;
-            manager.setSelectedSchematicPlacement(p);
+            setCurrent(p);
         }
         return true;
+    }
+
+    /** A row that can be selected and dragged: a placement or an entry of another mod. */
+    private static boolean isItem(Object o) {
+        return o instanceof SchematicPlacement || o instanceof ListEntry;
+    }
+
+    /** Litematica's own "selected placement" follows the clicked row; an entry of another mod is not one, so it clears it. */
+    private static void setCurrent(Object item) {
+        DataManager.getSchematicPlacementManager().setSelectedSchematicPlacement(item instanceof SchematicPlacement p ? p : null);
     }
 
     private static int indexOf(List<?> rows, Object o) {
@@ -183,11 +195,11 @@ public final class DragDrop {
                 SELECTION.clear();
                 SELECTION.add(pressPlacement);
                 anchor = pressPlacement;
-                DataManager.getSchematicPlacementManager().setSelectedSchematicPlacement(pressPlacement);
+                setCurrent(pressPlacement);
             }
-            List<SchematicPlacement> out = new ArrayList<>();
+            List<Object> out = new ArrayList<>();
             for (Object o : pressList.getCurrentEntries()) {
-                if (o instanceof SchematicPlacement p && SELECTION.contains(p)) out.add(p);
+                if (isItem(o) && SELECTION.contains(o)) out.add(o);
             }
             dragPlacements = out;
         }
@@ -203,7 +215,7 @@ public final class DragDrop {
         if (row != null) {
             Object entry = row.getEntry();
             if (entry instanceof Folders.Node n) folder = n.id;
-            else if (entry instanceof SchematicPlacement p) folder = Folders.folderOf(p);
+            else if (isItem(entry)) folder = Folders.folderOf(entry);
         }
         boolean valid = pressFolder == null || folder == null || !Folders.isInside(folder, pressFolder);
         return new Target(valid, true, folder);
@@ -224,9 +236,9 @@ public final class DragDrop {
     /** Ends the press: the drop, or the click when there was no drag. The state is cleared first, so it can only run once. */
     private static boolean finish(WidgetListBase<?, ?> list, int mx, int my) {
         boolean wasDrag = dragging, wasDeferred = deferred;
-        SchematicPlacement p = pressPlacement;
+        Object p = pressPlacement;
         String folder = pressFolder;
-        List<SchematicPlacement> moving = dragPlacements;
+        List<Object> moving = dragPlacements;
         Target t = wasDrag ? target(list, mx, my) : null;   // needs pressFolder
         reset();
         if (wasDrag) {
@@ -249,7 +261,7 @@ public final class DragDrop {
                 SELECTION.clear();
                 SELECTION.add(p);
                 anchor = p;
-                manager.setSelectedSchematicPlacement(p);
+                setCurrent(p);
             }
         }
         return false;
@@ -313,7 +325,7 @@ public final class DragDrop {
 
         // label next to the cursor
         String text = pressFolder != null ? pressFolderName
-                : dragPlacements.size() == 1 ? dragPlacements.get(0).getName() : dragPlacements.size() + " placements";
+                : dragPlacements.size() == 1 ? Folders.nameOf(dragPlacements.get(0)) : dragPlacements.size() + " rows";
         text = (ok ? "§f" : "§c") + text;
         int tw = list.getStringWidth(text);
         int lx = mx + 10, ly = my + 4;

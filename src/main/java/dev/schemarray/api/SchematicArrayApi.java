@@ -1,0 +1,79 @@
+package dev.schemarray.api;
+
+import dev.schemarray.DragDrop;
+import dev.schemarray.Folders;
+import dev.schemarray.ListRefresh;
+
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
+
+/** The extension point of Litematica Array for other mods. Call everything from the client thread. */
+public final class SchematicArrayApi {
+    private SchematicArrayApi() {}
+
+    public static final int API_VERSION = 1;
+
+    /** A button on the Shape Generator screen next to the save controls. */
+    public record ShapeAction(String label, String hover, Consumer<ShapeActionContext> action) {}
+
+    private static final List<ListEntryProvider> PROVIDERS = new CopyOnWriteArrayList<>();
+    private static final List<ShapeAction> SHAPE_ACTIONS = new CopyOnWriteArrayList<>();
+
+    /** Adds the provider's entries to the placement list (mixed with the placements, in folders, sorted by name). */
+    public static void registerListEntries(ListEntryProvider provider) {
+        if (provider != null && !PROVIDERS.contains(provider)) PROVIDERS.add(provider);
+    }
+
+    /** Adds one button to the Shape Generator screen; it gets the generated shape when clicked. */
+    public static void registerShapeAction(String buttonLabel, String hoverText, Consumer<ShapeActionContext> action) {
+        if (buttonLabel != null && action != null) SHAPE_ACTIONS.add(new ShapeAction(buttonLabel, hoverText, action));
+    }
+
+    /** Rebuilds the placement list on the next tick (call after your entries changed). */
+    public static void refreshList() {
+        ListRefresh.later();
+    }
+
+    /** The folder id the entry (or placement hash id) sits in; null = top level. */
+    public static String folderOf(String entryId) {
+        return entryId == null ? null : Folders.folderOf(entryId);
+    }
+
+    /** The row color of the entry (own color, else its folder's) as ARGB, 0 = none. */
+    public static int colorOf(String entryId) {
+        if (entryId == null) return 0;
+        int c = Folders.effectiveColorOfId(entryId);
+        return c < 0 ? 0 : 0xFF000000 | Folders.COLORS[c];
+    }
+
+    /** The ids of the entries that are selected in the list right now. */
+    public static Set<String> selectedEntryIds() {
+        Set<String> out = new LinkedHashSet<>();
+        for (Object o : DragDrop.selection()) if (o instanceof ListEntry e) out.add(e.id());
+        return out;
+    }
+
+    // ---- used by Litematica Array itself ----
+
+    /** All entries of all providers; a failing provider is skipped. */
+    public static List<ListEntry> allEntries() {
+        List<ListEntry> out = new ArrayList<>();
+        for (ListEntryProvider p : PROVIDERS) {
+            try {
+                var entries = p.entries();
+                if (entries != null) for (ListEntry e : entries) if (e != null && e.id() != null) out.add(e);
+            } catch (Throwable t) {
+                System.out.println("[SchematicArray] list entry provider failed: " + t);
+            }
+        }
+        return out;
+    }
+
+    public static List<ShapeAction> shapeActions() {
+        return SHAPE_ACTIONS;
+    }
+}
