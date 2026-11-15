@@ -1,5 +1,6 @@
 package dev.schemarray;
 
+import dev.schemarray.editor.DemoLayer;
 import net.fabricmc.api.ClientModInitializer;
 import dev.schemarray.shape.mc.ShapePreview;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -9,6 +10,7 @@ import net.fabricmc.loader.api.FabricLoader;
 public final class SchemArrayMod implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
+        DemoLayer.register(); // TODO remove in WP 0.2
         if (!FabricLoader.getInstance().isModLoaded("litematica")) return;
         ThumbnailCompat.register();
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> ShapePreview.clear());
