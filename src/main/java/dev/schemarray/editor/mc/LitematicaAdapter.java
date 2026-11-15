@@ -77,13 +77,33 @@ public final class LitematicaAdapter implements PlacementPort {
     // ------------------------------------------------------------------------------------------ schematics
 
     /**
-     * The schematic of this file, loaded through Litematica's holder (so placements of the same file share it).
-     * Cached per file and modification time: when the file changed, the old copy is dropped from the holder (which
-     * removes the placements that used it; the reconciler makes them again) and the file is loaded anew.
+     * The schematic of this file as placements use it: loaded through Litematica's holder, so placements of the same
+     * file share it. The holder is only ever asked to load; nothing is removed from it (that would drop the
+     * player's own placements). Known limitation: if the file is edited while Litematica holds a copy, Litematica
+     * keeps showing the old copy until it reloads it itself.
      *
      * @return null when the file is missing or cannot be read
      */
     public Handle loadSchematic(Path file) {
+        Path f = file.toAbsolutePath().normalize();
+        long mtime;
+        try {
+            mtime = Files.getLastModifiedTime(f).toMillis();
+        } catch (IOException e) {
+            return null;
+        }
+        LitematicaSchematic s = SchematicHolder.getInstance().getOrLoad(f);
+        return s == null ? null : new Handle(s, f, mtime);
+    }
+
+    /**
+     * A private copy of the file for reading (sizes, regions, block counts), loaded with Litematica's own file
+     * loader and kept outside the holder: no placement can see it and none is affected. Cached per file and
+     * modification time.
+     *
+     * @return null when the file is missing or cannot be read
+     */
+    public Handle loadPrivate(Path file) {
         Path f = file.toAbsolutePath().normalize();
         long mtime;
         try {
@@ -94,12 +114,8 @@ public final class LitematicaAdapter implements PlacementPort {
         }
         Handle h = loaded.get(f);
         if (h != null && h.mtime == mtime) return h;
-        SchematicHolder holder = SchematicHolder.getInstance();
-        for (LitematicaSchematic old : new java.util.ArrayList<>(holder.getAllSchematics())) {
-            if (f.equals(old.getFile())) holder.removeSchematic(old);
-        }
-        byId.clear();   // placements of the old copy are gone; ids are found again on demand
-        LitematicaSchematic s = holder.getOrLoad(f);
+        Path dir = f.getParent();
+        LitematicaSchematic s = dir == null ? null : LitematicaSchematic.createFromFile(dir, f.getFileName().toString());
         if (s == null) {
             loaded.remove(f);
             return null;

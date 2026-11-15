@@ -123,7 +123,6 @@ public final class ReconcileCore {
         final Set<String> existing;
         final Set<String> modelIds = new HashSet<>();
         final Set<String> claimed = new HashSet<>();
-        final List<ObjectNode> gone = new ArrayList<>();
         int created, updated, removed, adopted, deferred;
 
         Run(Scene scene, int tick, Set<String> existing) {
@@ -148,17 +147,6 @@ public final class ReconcileCore {
         }
         visit(scene.loose(), false, null, r);
 
-        for (ObjectNode g : r.gone) {
-            Node parent = g.parent();
-            if (parent == null) continue;
-            int idx = parent.children().indexOf(g);
-            parent.removeChild(g);
-            for (String id : g.placementIds().values()) {
-                if (r.existing.remove(id)) port.remove(id);
-                lastSeen.remove(id);
-            }
-            listener.onExternalRemoved(g, parent, idx);
-        }
         // placements of nodes that left the model (deleted, project closed)
         for (String id : prevModelIds) {
             if (!r.modelIds.contains(id) && r.existing.remove(id)) {
@@ -240,9 +228,10 @@ public final class ReconcileCore {
         String baseId = ids.get(ObjectNode.BASE_CELL);
         PlacementState bs = baseId != null && r.existing.contains(baseId) ? port.read(baseId) : null;
         if (!linked && proj == null && baseId != null && bs == null) {
-            r.gone.add(ob);   // a Loose object whose placement was deleted in Litematica
+            ob.setMissing(true);   // a Loose object whose placement is not in Litematica: keep the node, stop reconciling it
             return;
         }
+        ob.setMissing(false);
 
         // drift: the base placement was moved outside the editor
         if (bs != null && !linked) {

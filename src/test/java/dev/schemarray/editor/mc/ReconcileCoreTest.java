@@ -9,7 +9,6 @@ import dev.schemarray.editor.core.ArrayModifier;
 import dev.schemarray.editor.core.AssemblyNode;
 import dev.schemarray.editor.core.FolderNode;
 import dev.schemarray.editor.core.Mirror;
-import dev.schemarray.editor.core.Node;
 import dev.schemarray.editor.core.ObjectNode;
 import dev.schemarray.editor.core.ProjectNode;
 import dev.schemarray.editor.core.Rot;
@@ -38,7 +37,6 @@ class ReconcileCoreTest {
     final FakePort port = new FakePort();
     final Vec3i size = new Vec3i(4, 3, 2);
     final List<ExternalChange> changes = new ArrayList<>();
-    final List<ObjectNode> removedNodes = new ArrayList<>();
     ReconcileCore core;
     Scene scene;
     ProjectNode proj;
@@ -51,11 +49,6 @@ class ReconcileCoreTest {
             @Override
             public void onExternalChange(ExternalChange c) {
                 changes.add(c);
-            }
-
-            @Override
-            public void onExternalRemoved(ObjectNode node, Node parent, int index) {
-                removedNodes.add(node);
             }
         });
         scene = new Scene();
@@ -459,18 +452,62 @@ class ReconcileCoreTest {
     }
 
     @Test
-    void aLooseObjectWhosePlacementWasDeletedLeavesLoose() {
+    void aLooseObjectWhosePlacementIsMissingIsMarkedNotDeleted() {
         ObjectNode o = new ObjectNode("l", dir.resolve("l.litematic").toString());
         o.mods().add(array(2, 1));
         scene.loose().addChild(o);
         run();
         assertEquals(2, port.placements.size());
-        port.placements.remove(o.placementIds().get(ObjectNode.BASE_CELL));
+        String base = o.placementIds().get(ObjectNode.BASE_CELL);
+        var ids = new java.util.LinkedHashMap<>(o.placementIds());
+        PlacementState saved = port.placements.remove(base);
+        int created = port.created;
         run();
-        assertTrue(scene.loose().children().isEmpty());
-        assertEquals(List.of(o), removedNodes);
-        assertTrue(port.placements.isEmpty(), "its copies go too");
+        assertEquals(List.of(o), scene.loose().children(), "never deleted automatically");
+        assertTrue(o.missing());
+        assertEquals(ids, o.placementIds(), "the model is not changed");
+        assertEquals(created, port.created, "and not recreated");
+        assertEquals(1, port.placements.size(), "the copy is left alone");
+        port.placements.put(base, saved);
+        run();
+        assertFalse(o.missing());
+        assertEquals(List.of(o), scene.loose().children());
     }
+
+    @Test
+    void aLoosePlacementThatAppearsOnlyAfter200TicksKeepsItsNode() {
+        UUID id = UUID.randomUUID();
+        ObjectNode o = new ObjectNode("l", dir.resolve("l.litematic").toString());
+        o.setTransform(at(4, 5, 6));
+        o.placementIds().put(ObjectNode.BASE_CELL, id.toString());
+        scene.loose().addChild(o);
+        for (int i = 0; i < 200; i++) run();   // Litematica has not loaded it yet
+        assertEquals(List.of(o), scene.loose().children());
+        assertTrue(o.missing());
+        assertEquals(at(4, 5, 6), o.transform());
+        assertEquals(id.toString(), o.placementIds().get(ObjectNode.BASE_CELL));
+        assertTrue(port.placements.isEmpty());
+
+        port.placements.put(id.toString(), new PlacementState(dir.resolve("l.litematic"), new Vec3i(4, 5, 6), Rot.NONE, Mirror.NONE, true, true, "l"));
+        run();
+        assertFalse(o.missing());
+        assertEquals(List.of(o), scene.loose().children());
+        assertEquals(1, port.placements.size());
+        assertEquals(0, port.created);
+        assertTrue(changes.isEmpty());
+    }
+
+    @Test
+    void theEditorCodeHasNoPathThatRemovesSchematicsFromTheHolder() throws IOException {
+        for (String name : List.of("LitematicaAdapter", "SchematicInfo", "Reconciler", "ReconcileCore")) {
+            String src = Files.readString(Path.of("src/main/java/dev/schemarray/editor/mc/" + name + ".java"));
+            String code = src.replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("//[^\n]*", "");
+            assertFalse(code.contains("removeSchematic("), name);
+            assertFalse(code.contains("removeAllPlacementsOfSchematic"), name);
+            assertFalse(code.contains("clearLoadedSchematics"), name);
+        }
+    }
+
 
     @Test
     void aProjectObjectWhosePlacementWasDeletedIsMadeAgain() {
@@ -482,7 +519,6 @@ class ReconcileCoreTest {
         run();
         assertEquals(List.of(o), proj.children());
         assertNotNull(port.read(id), "same id again");
-        assertTrue(removedNodes.isEmpty());
     }
 
     // ------------------------------------------------------------------------------------------ linked assemblies

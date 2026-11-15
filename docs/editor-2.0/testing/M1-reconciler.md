@@ -37,7 +37,7 @@ Keep a copy of `config/schemarray/` (folders.json, arrays.json) and of the world
 3. Move one of the array copies. Expect it jumps back to its cell within a tick (only the base is adopted).
 4. Edit `project.json` by hand while the project is closed, then open it. Expect the placement appears at the new position (the file wins).
 5. Delete the base placement of a project object in the Litematica list. Expect it is made again at once, with the same id.
-6. Delete the placement of a Loose (migrated) object. Expect its copies disappear and the object leaves the `.lasm` after the next autosave.
+6. Delete the placement of a Loose (migrated) object. Expect the object stays in the model (flagged missing, not recreated, copies untouched) and is not removed from the `.lasm`.
 
 ## E. Budget and rebuilds
 1. Give an object an Array modifier of 500 copies (use a small schematic). Open the project.
@@ -52,7 +52,7 @@ Keep a copy of `config/schemarray/` (folders.json, arrays.json) and of the world
 4. Quit; check `project.json`: it holds no placement ids for the linked parts.
 
 ## G. Robustness
-1. Replace the schematic file of a project object while the game runs. Expect no crash. Note: Litematica drops the loaded copy and the reconciler makes the placement again.
+1. Replace the schematic file of a project object while the game runs. Expect no crash and no placement lost; Litematica may keep showing the old copy (known limitation).
 2. Corrupt `project.json` of a remembered project and join. Expect one log line, the other projects open, the world loads normally.
 3. Put garbage into `editor-session.json`. Expect it is ignored and rewritten.
 4. Check the log after each section for `editor reconciler stopped`. If it appears, the 1.x behaviour continues; report the stack trace.

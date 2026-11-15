@@ -25,6 +25,7 @@ public final class ObjectNode extends Node implements HasFront {
     private List<Modifier> mods = new ArrayList<>();
     private boolean wire;
     private Map<String, String> placementIds = new LinkedHashMap<>();
+    private boolean missing;
 
     public ObjectNode(UUID id, String name) {
         super(id, name);
@@ -90,6 +91,19 @@ public final class ObjectNode extends Node implements HasFront {
 
     public void setPlacementIds(Map<String, String> ids) {
         this.placementIds = new LinkedHashMap<>(ids);
+    }
+
+    /**
+     * Runtime flag, never saved and not part of equality: the reconciler found that this Loose object's placement is
+     * not in Litematica. The node is kept and no longer reconciled; the UI greys it out ("placement not found").
+     * It only leaves through an explicit Delete, and the flag clears by itself when the placement is there again.
+     */
+    public boolean missing() {
+        return missing;
+    }
+
+    public void setMissing(boolean missing) {
+        this.missing = missing;
     }
 
     @Override

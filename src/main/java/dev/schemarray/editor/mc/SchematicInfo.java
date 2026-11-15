@@ -74,7 +74,7 @@ public final class SchematicInfo implements SizeSource {
         long now = System.currentTimeMillis();
         Entry e = cache.get(f);
         if (e != null && now - e.checkedAtMillis < RECHECK_MILLIS) return e.info;
-        LitematicaAdapter.Handle h = adapter.loadSchematic(f);
+        LitematicaAdapter.Handle h = adapter.loadPrivate(f);
         if (h == null) {
             cache.remove(f);
             return null;
