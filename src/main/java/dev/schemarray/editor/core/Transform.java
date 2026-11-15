@@ -61,6 +61,17 @@ public record Transform(Vec3i pos, Rot rot, Mirror mirror) {
             extra = 2;
         }
         Rot r = Rot.ofSteps(rot.steps() + sign * child.rot.steps() + extra);
-        return new Transform(applyVector(child.pos).add(pos), r, m);
+        return new Transform(applyVector(child.pos).add(pos), r, m).canonical();
+    }
+
+    /**
+     * The one representation of this map with mirror in {NONE, FRONT_BACK}: LEFT_RIGHT (z to -z) equals FRONT_BACK
+     * followed by a half turn, so a LEFT_RIGHT transform becomes FRONT_BACK with two more steps of turn. Every point
+     * maps the same, so transforms that move blocks identically have equal canonical forms. {@link #then} always
+     * returns this form.
+     */
+    public Transform canonical() {
+        if (mirror != Mirror.LEFT_RIGHT) return this;
+        return new Transform(pos, rot.rotate(2), Mirror.FRONT_BACK);
     }
 }
