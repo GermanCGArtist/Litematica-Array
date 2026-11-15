@@ -100,6 +100,61 @@ public final class HostCore {
         return ImGui.getIO().getWantCaptureMouse();
     }
 
+    static boolean imguiWantsTextInput() {
+        if (!initialized) return false;
+        ImGui.setCurrentContext(ctx);
+        return ImGui.getIO().getWantTextInput();
+    }
+
+    // ------------------------------------------------------------------ cursor
+
+    private static boolean cursorCaptured;
+    private static UiHost.Cursor cursorRequest;
+    private static final long[] STD_CURSORS = new long[UiHost.Cursor.values().length];
+
+    static void setCursor(UiHost.Cursor c) {
+        cursorRequest = c;
+    }
+
+    static boolean isCursorCaptured() {
+        return cursorCaptured;
+    }
+
+    static void captureCursor(boolean on) {
+        if (on == cursorCaptured) return;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null || mc.getWindow() == null) return;
+        long w = mc.getWindow().handle();
+        cursorCaptured = on;
+        if (on) {
+            GLFW.glfwSetInputMode(w, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_DISABLED);
+            if (GLFW.glfwRawMouseMotionSupported()) GLFW.glfwSetInputMode(w, GLFW.GLFW_RAW_MOUSE_MOTION, GLFW.GLFW_TRUE);
+        } else {
+            GLFW.glfwSetInputMode(w, GLFW.GLFW_RAW_MOUSE_MOTION, GLFW.GLFW_FALSE);
+            GLFW.glfwSetInputMode(w, GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);   // GLFW puts the cursor back where it was
+        }
+    }
+
+    private static long standardCursor(UiHost.Cursor c) {
+        int i = c.ordinal();
+        if (STD_CURSORS[i] == 0L) {
+            int shape = switch (c) {
+                case TEXT -> GLFW.GLFW_IBEAM_CURSOR;
+                case CROSSHAIR -> GLFW.GLFW_CROSSHAIR_CURSOR;
+                case HAND -> GLFW.GLFW_HAND_CURSOR;
+                case RESIZE_EW -> GLFW.GLFW_HRESIZE_CURSOR;
+                case RESIZE_NS -> GLFW.GLFW_VRESIZE_CURSOR;
+                case RESIZE_ALL -> GLFW.GLFW_RESIZE_ALL_CURSOR;
+                case NOT_ALLOWED -> GLFW.GLFW_NOT_ALLOWED_CURSOR;
+                default -> GLFW.GLFW_ARROW_CURSOR;
+            };
+            long h = GLFW.glfwCreateStandardCursor(shape);
+            if (h == 0L) h = GLFW.glfwCreateStandardCursor(GLFW.GLFW_ARROW_CURSOR);   // shape not supported here
+            STD_CURSORS[i] = h;
+        }
+        return STD_CURSORS[i];
+    }
+
     // ------------------------------------------------------------------ frame (render thread)
 
     /** Called at the head of {@code RenderSystem.flipFrame}. */
@@ -129,7 +184,8 @@ public final class HostCore {
             ImGui.setCurrentContext(ctx);
             ImGuiIO io = ImGui.getIO();
             io.setIniFilename(null);
-            io.addConfigFlags(ImGuiConfigFlags.NavEnableKeyboard);
+            io.addConfigFlags(ImGuiConfigFlags.NavEnableKeyboard | ImGuiConfigFlags.DockingEnable);
+            io.setConfigDockingWithShift(true);   // windows float; hold Shift while dragging to dock
 
             Theme.apply(ImGui.getStyle(), scale);
             try {
@@ -174,12 +230,20 @@ public final class HostCore {
         ImGui.setCurrentContext(ctx);
         refreshScale();
         ImGuiIO io = ImGui.getIO();
-        if (mc.mouseHandler.isMouseGrabbed()) {
-            // Mouse look: ImGui must neither see the pointer nor touch the cursor mode.
+        UiHost.Cursor wanted = cursorRequest;
+        cursorRequest = null;
+        if (mc.mouseHandler.isMouseGrabbed() || cursorCaptured) {
+            // Mouse look / orbit / fly: ImGui must neither see the pointer nor touch the cursor mode.
             io.addConfigFlags(ImGuiConfigFlags.NoMouse | ImGuiConfigFlags.NoMouseCursorChange);
             io.addMousePosEvent(-Float.MAX_VALUE, -Float.MAX_VALUE);
         } else {
-            io.removeConfigFlags(ImGuiConfigFlags.NoMouse | ImGuiConfigFlags.NoMouseCursorChange);
+            io.removeConfigFlags(ImGuiConfigFlags.NoMouse);
+            if (wanted != null && wanted != UiHost.Cursor.AUTO) {
+                io.addConfigFlags(ImGuiConfigFlags.NoMouseCursorChange);
+                GLFW.glfwSetCursor(mc.getWindow().handle(), standardCursor(wanted));
+            } else {
+                io.removeConfigFlags(ImGuiConfigFlags.NoMouseCursorChange);
+            }
         }
         io.setWantSetMousePos(false);
         glfw.newFrame();
@@ -218,10 +282,10 @@ public final class HostCore {
         return false;
     }
 
-    private static boolean anyWantsMouse() {
+    private static boolean anyWantsKey(int key, int scancode, int action, int mods) {
         for (UiLayer l : visibleLayers()) {
             try {
-                if (l.wantsMouse()) return true;
+                if (l.wantsKey(key, scancode, action, mods)) return true;
             } catch (Throwable t) {
                 fail(l, t);
             }
@@ -233,9 +297,18 @@ public final class HostCore {
     public static boolean onKey(long window, int key, int scancode, int action, int mods) {
         Minecraft mc = Minecraft.getInstance();
         if (!routing(window, mc)) return false;
-        boolean wants = anyWantsKeyboard();
+        boolean wants = anyWantsKey(key, scancode, action, mods);
         ImGui.setCurrentContext(ctx);
         if (wants || action == GLFW.GLFW_RELEASE) glfw.keyCallback(window, key, scancode, action, mods);
+        if (wants || action == GLFW.GLFW_RELEASE) {
+            for (UiLayer l : visibleLayers()) {
+                try {
+                    l.onKey(key, scancode, action, mods);
+                } catch (Throwable t) {
+                    fail(l, t);
+                }
+            }
+        }
         return wants;
     }
 
@@ -253,22 +326,59 @@ public final class HostCore {
         if (!routing(window, mc) || mc.mouseHandler.isMouseGrabbed()) return false;
         ImGui.setCurrentContext(ctx);
         glfw.cursorPosCallback(window, x, y);
-        return anyWantsMouse();
+        boolean wants = false;
+        for (UiLayer l : visibleLayers()) {
+            try {
+                if (l.wantsMouse()) {
+                    wants = true;
+                    l.onMouseMove(x, y);
+                }
+            } catch (Throwable t) {
+                fail(l, t);
+            }
+        }
+        return wants;
     }
 
     public static boolean onMouseButton(long window, int button, int action, int mods) {
         Minecraft mc = Minecraft.getInstance();
         if (!routing(window, mc) || mc.mouseHandler.isMouseGrabbed()) return false;
-        boolean wants = anyWantsMouse();
+        boolean wants = false;
+        for (UiLayer l : visibleLayers()) {
+            try {
+                if (l.wantsMouse()) wants = true;
+            } catch (Throwable t) {
+                fail(l, t);
+            }
+        }
         ImGui.setCurrentContext(ctx);
-        if (wants || action == GLFW.GLFW_RELEASE) glfw.mouseButtonCallback(window, button, action, mods);
+        if (wants || action == GLFW.GLFW_RELEASE) {
+            glfw.mouseButtonCallback(window, button, action, mods);
+            for (UiLayer l : visibleLayers()) {
+                try {
+                    if (action == GLFW.GLFW_RELEASE || l.wantsMouse()) l.onMouseButton(button, action, mods);
+                } catch (Throwable t) {
+                    fail(l, t);
+                }
+            }
+        }
         return wants;
     }
 
     public static boolean onMouseScroll(long window, double dx, double dy) {
         Minecraft mc = Minecraft.getInstance();
         if (!routing(window, mc) || mc.mouseHandler.isMouseGrabbed()) return false;
-        boolean wants = anyWantsMouse();
+        boolean wants = false;
+        for (UiLayer l : visibleLayers()) {
+            try {
+                if (l.wantsMouse()) {
+                    wants = true;
+                    l.onScroll(dx, dy);
+                }
+            } catch (Throwable t) {
+                fail(l, t);
+            }
+        }
         if (wants) {
             ImGui.setCurrentContext(ctx);
             glfw.scrollCallback(window, dx, dy);

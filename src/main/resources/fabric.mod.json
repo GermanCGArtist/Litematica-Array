@@ -9,7 +9,7 @@
   "license": "MIT",
   "environment": "client",
   "entrypoints": { "client": ["dev.schemarray.SchemArrayMod"] },
-  "mixins": ["schemarray.mixins.json"],
+  "mixins": ["schemarray.mixins.json", "schemarray-editor.mixins.json"],
   "depends": {
     "fabricloader": ">=0.19.3",
     "fabric-api": "*",
