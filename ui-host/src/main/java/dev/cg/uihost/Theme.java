@@ -21,6 +21,8 @@ public final class Theme {
     /** UI text (Inter 15). */ public ImFont ui() { return ui; }
     /** Small UI text (Inter 12.5). */ public ImFont small() { return small; }
     /** Code (JetBrains Mono 14). */ public ImFont mono() { return mono; }
+    /** Small code (JetBrains Mono 12): badges, key caps, map labels. */ public ImFont monoS() { return monoS; }
+    /** Window titles and primary buttons (Inter SemiBold 15); falls back to {@link #ui()} if the font is missing. */ public ImFont uiBold() { return uiBold != null ? uiBold : ui; }
     /** Medium numerals (Barlow Condensed 28). */ public ImFont numM() { return numM; }
     /** Large numerals (Barlow Condensed 44). */ public ImFont numL() { return numL; }
 
@@ -31,9 +33,9 @@ public final class Theme {
     public static final int OK = 0x8ad27e, WARN = 0xf2b35e, ERR = 0xf07470;
     public static final int BTN = 0x23272d, CHIP = 0x262a31, TRACK = 0x2a2f36, SLOT = 0x1c1f24, SEL = 0x21403b, RUNLINE = 0x18302d;
 
-    private static ImFont ui, small, mono, numM, numL;
+    private static ImFont ui, small, mono, monoS, uiBold, numM, numL;
     private static float builtScale = -1f;
-    private static byte[] interBytes, monoBytes, barlowBytes;
+    private static byte[] interBytes, interBoldBytes, monoBytes, barlowBytes;
 
     /** ImGui packed colour (ABGR) from 0xRRGGBB and alpha. */
     public static int u32(int rgb, float a) {
@@ -142,16 +144,21 @@ public final class Theme {
     public static boolean loadFonts(ImGuiIO io, float scale) {
         builtScale = scale;
         if (interBytes == null) interBytes = resource("Inter.ttf");
+        if (interBoldBytes == null) interBoldBytes = resource("Inter-SemiBold.ttf");
         if (monoBytes == null) monoBytes = resource("JetBrainsMono.ttf");
         if (barlowBytes == null) barlowBytes = resource("BarlowCondensed-SemiBold.ttf");
         var atlas = io.getFonts();
         short[] ranges = new short[]{0x0020, 0x00FF, 0x2010, 0x2027, 0x2190, 0x2193, 0x2026, 0x2026, 0};
-        ui = small = mono = numM = numL = null;
+        ui = small = mono = monoS = uiBold = numM = numL = null;
         if (interBytes != null) {
             ui = atlas.addFontFromMemoryTTF(interBytes, 15f * scale, cfg(), ranges);
             small = atlas.addFontFromMemoryTTF(interBytes, 12.5f * scale, cfg(), ranges);
         }
-        if (monoBytes != null) mono = atlas.addFontFromMemoryTTF(monoBytes, 14f * scale, cfg(), ranges);
+        if (interBoldBytes != null) uiBold = atlas.addFontFromMemoryTTF(interBoldBytes, 15f * scale, cfg(), ranges);
+        if (monoBytes != null) {
+            mono = atlas.addFontFromMemoryTTF(monoBytes, 14f * scale, cfg(), ranges);
+            monoS = atlas.addFontFromMemoryTTF(monoBytes, 12f * scale, cfg(), ranges);
+        }
         if (barlowBytes != null) {
             numM = atlas.addFontFromMemoryTTF(barlowBytes, 28f * scale, cfg(), ranges);
             numL = atlas.addFontFromMemoryTTF(barlowBytes, 44f * scale, cfg(), ranges);

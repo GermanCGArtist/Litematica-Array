@@ -38,4 +38,35 @@ public final class UiHost {
     public static boolean imguiWantsMouse() {
         return HostCore.imguiWantsMouse();
     }
+
+    /** ImGui's text-input flag: true while a text field is active. */
+    public static boolean imguiWantsTextInput() {
+        return HostCore.imguiWantsTextInput();
+    }
+
+    /** Mouse cursors a layer can ask for (GLFW standard cursors). {@link #AUTO} leaves the choice to ImGui. */
+    public enum Cursor { AUTO, ARROW, TEXT, CROSSHAIR, HAND, RESIZE_EW, RESIZE_NS, RESIZE_ALL, NOT_ALLOWED }
+
+    /**
+     * Asks for a cursor shape for the next frame. Call it every frame the shape should stay (typically from
+     * {@link UiLayer#draw()}); when a frame passes without a call, ImGui controls the cursor again. Has no effect
+     * while the cursor is captured.
+     */
+    public static void setCursor(Cursor cursor) {
+        HostCore.setCursor(cursor);
+    }
+
+    /**
+     * Hides the cursor and delivers raw relative motion to the layers ({@link UiLayer#onMouseMove}) while true: the
+     * mode for orbit and fly. Turning it off restores the cursor at the spot where it was captured. ImGui sees no
+     * mouse while captured. Does not touch Minecraft's own mouse-grab state, so vanilla mouse look stays off.
+     */
+    public static void captureCursor(boolean capture) {
+        HostCore.captureCursor(capture);
+    }
+
+    /** Whether {@link #captureCursor} is on. */
+    public static boolean isCursorCaptured() {
+        return HostCore.isCursorCaptured();
+    }
 }
