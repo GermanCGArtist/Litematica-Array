@@ -1,0 +1,580 @@
+package dev.schemarray.editor.mc;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import dev.schemarray.editor.core.ArrayModifier;
+import dev.schemarray.editor.core.AssemblyNode;
+import dev.schemarray.editor.core.FolderNode;
+import dev.schemarray.editor.core.Mirror;
+import dev.schemarray.editor.core.Node;
+import dev.schemarray.editor.core.ObjectNode;
+import dev.schemarray.editor.core.ProjectNode;
+import dev.schemarray.editor.core.Rot;
+import dev.schemarray.editor.core.Scene;
+import dev.schemarray.editor.core.Transform;
+import dev.schemarray.editor.core.Vec3i;
+import dev.schemarray.editor.io.AssemblyIo;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+/** The planning logic of the reconciler, against a fake placement list (no Minecraft). */
+class ReconcileCoreTest {
+    @TempDir
+    Path dir;
+
+    final FakePort port = new FakePort();
+    final Vec3i size = new Vec3i(4, 3, 2);
+    final List<ExternalChange> changes = new ArrayList<>();
+    final List<ObjectNode> removedNodes = new ArrayList<>();
+    ReconcileCore core;
+    Scene scene;
+    ProjectNode proj;
+    int tick;
+
+    @BeforeEach
+    void setUp() {
+        core = new ReconcileCore(port, f -> size, new LasmCache(), dir);
+        core.setListener(new DriftListener() {
+            @Override
+            public void onExternalChange(ExternalChange c) {
+                changes.add(c);
+            }
+
+            @Override
+            public void onExternalRemoved(ObjectNode node, Node parent, int index) {
+                removedNodes.add(node);
+            }
+        });
+        scene = new Scene();
+        proj = new ProjectNode("P");
+        proj.setPath(dir.toString());
+        proj.setWorld("w");
+        proj.setDim("d");
+        scene.openProject(proj);
+    }
+
+    ReconcileCore.Result run() {
+        return core.reconcile(scene, "w", "d", ++tick);
+    }
+
+    static ObjectNode obj(String name) {
+        return new ObjectNode(name, "files/" + name + ".litematic");
+    }
+
+    static Transform at(int x, int y, int z) {
+        return new Transform(new Vec3i(x, y, z), Rot.NONE, Mirror.NONE);
+    }
+
+    static ArrayModifier array(int count, double rx) {
+        ArrayModifier m = new ArrayModifier();
+        m.count = count;
+        m.relative = new double[]{rx, 0, 0};
+        return m;
+    }
+
+    Set<Vec3i> origins() {
+        Set<Vec3i> out = new HashSet<>();
+        for (PlacementState s : port.placements.values()) out.add(s.origin());
+        return out;
+    }
+
+    // ------------------------------------------------------------------------------------------ cells
+
+    @Test
+    void baseAndArrayCellsGetPlacementsWithTheOldTransformRule() {
+        ObjectNode o = obj("a");
+        o.setTransform(new Transform(new Vec3i(10, 0, 0), Rot.CW_90, Mirror.NONE));
+        o.mods().add(array(3, 1));   // step = 1 * size.x = 4 along the object's own x
+        proj.addChild(o);
+        ReconcileCore.Result r = run();
+        assertEquals(3, r.created());
+        assertEquals(3, port.placements.size());
+        assertEquals(Set.of(new Vec3i(10, 0, 0), new Vec3i(10, 0, 4), new Vec3i(10, 0, 8)), origins());   // CW_90: (x,y,z) -> (-z,y,x)
+        for (PlacementState s : port.placements.values()) {
+            assertEquals(Rot.CW_90, s.rot());
+            assertEquals(Mirror.NONE, s.mirror());
+        }
+        assertEquals(Set.of(ObjectNode.BASE_CELL, "1", "2"), o.placementIds().keySet());
+        PlacementState base = port.read(o.placementIds().get(ObjectNode.BASE_CELL));
+        assertEquals("a", base.name());
+        assertEquals(dir.resolve("files").resolve("a.litematic"), base.file());
+        assertEquals("a #1", port.read(o.placementIds().get("1")).name());
+    }
+
+    @Test
+    void mirroredCellsFollowMirrorFirstThenTurn() {
+        ObjectNode o = obj("m");
+        o.setTransform(new Transform(Vec3i.ZERO, Rot.NONE, Mirror.FRONT_BACK));   // x -> -x
+        o.mods().add(array(2, 1));
+        proj.addChild(o);
+        run();
+        assertEquals(Set.of(Vec3i.ZERO, new Vec3i(-4, 0, 0)), origins());
+    }
+
+    @Test
+    void secondPassChangesNothing() {
+        ObjectNode o = obj("a");
+        o.mods().add(array(3, 1));
+        proj.addChild(o);
+        run();
+        ReconcileCore.Result r = run();
+        assertEquals(0, r.created() + r.updated() + r.removed() + r.adopted() + r.deferred());
+    }
+
+    @Test
+    void budgetLimitsCreationsPerTick() {
+        ObjectNode o = obj("big");
+        o.mods().add(array(101, 1));   // base + 100 copies
+        proj.addChild(o);
+        ReconcileCore.Result r1 = run();
+        assertEquals(64, r1.created());
+        assertEquals(37, r1.deferred());
+        ReconcileCore.Result r2 = run();
+        assertEquals(37, r2.created());
+        assertEquals(0, r2.deferred());
+        assertEquals(101, port.placements.size());
+        assertEquals(101, new HashSet<>(o.placementIds().values()).size());
+    }
+
+    @Test
+    void movingTheModelMovesThePlacementsAndKeepsTheirIds() {
+        ObjectNode o = obj("a");
+        o.mods().add(array(2, 1));
+        proj.addChild(o);
+        run();
+        var ids = new java.util.LinkedHashMap<>(o.placementIds());
+        o.setTransform(at(5, 6, 7));
+        ReconcileCore.Result r = run();
+        assertEquals(0, r.created());
+        assertEquals(2, r.updated());
+        assertEquals(ids, o.placementIds());
+        assertEquals(Set.of(new Vec3i(5, 6, 7), new Vec3i(9, 6, 7)), origins());
+        assertTrue(changes.isEmpty(), "an editor move is not drift");
+    }
+
+    @Test
+    void shrinkingTheArrayRemovesTheSurplusPlacements() {
+        ObjectNode o = obj("a");
+        ArrayModifier m = array(4, 1);
+        o.mods().add(m);
+        proj.addChild(o);
+        run();
+        assertEquals(4, port.placements.size());
+        m.count = 2;
+        ReconcileCore.Result r = run();
+        assertEquals(2, r.removed());
+        assertEquals(2, port.placements.size());
+        assertEquals(Set.of(ObjectNode.BASE_CELL, "1"), o.placementIds().keySet());
+        o.mods().clear();
+        run();
+        assertEquals(1, port.placements.size());
+    }
+
+    // ------------------------------------------------------------------------------------------ visibility, worlds, ownership
+
+    @Test
+    void hiddenNodesAndNodesUnderHiddenAncestorsLoseTheirPlacements() {
+        FolderNode f = new FolderNode("f");
+        ObjectNode a = obj("a"), b = obj("b");
+        f.addChild(a);
+        proj.addChild(f);
+        proj.addChild(b);
+        run();
+        assertEquals(2, port.placements.size());
+        String idA = a.placementIds().get(ObjectNode.BASE_CELL);
+
+        f.setHidden(true);
+        run();
+        assertEquals(1, port.placements.size());
+        assertFalse(port.placements.containsKey(idA));
+
+        f.setHidden(false);
+        run();
+        assertEquals(2, port.placements.size());
+        assertTrue(port.placements.containsKey(idA), "the same id comes back");
+
+        proj.setHidden(true);
+        run();
+        assertTrue(port.placements.isEmpty());
+    }
+
+    @Test
+    void aProjectOfAnotherWorldOrDimensionHasNoPlacements() {
+        proj.addChild(obj("a"));
+        run();
+        assertEquals(1, port.placements.size());
+        core.reconcile(scene, "w", "other:dim", ++tick);
+        assertTrue(port.placements.isEmpty());
+        core.reconcile(scene, "w", "d", ++tick);
+        assertEquals(1, port.placements.size());
+        core.reconcile(scene, "elsewhere", "d", ++tick);
+        assertTrue(port.placements.isEmpty());
+    }
+
+    @Test
+    void unmanagedPlacementsAreNeverTouched() {
+        String foreign = port.addForeign(dir.resolve("x.litematic"), new Vec3i(1, 2, 3));
+        ObjectNode o = obj("a");
+        proj.addChild(o);
+        run();
+        proj.removeChild(o);
+        run();
+        run();
+        assertEquals(Set.of(foreign), port.placements.keySet());
+        assertEquals(new Vec3i(1, 2, 3), port.read(foreign).origin());
+        assertEquals(0, port.updated);
+    }
+
+    @Test
+    void aNodeThatLeavesTheModelTakesItsPlacementsAway() {
+        ObjectNode o = obj("a");
+        o.mods().add(array(3, 1));
+        proj.addChild(o);
+        run();
+        assertEquals(3, port.placements.size());
+        proj.removeChild(o);
+        run();
+        assertTrue(port.placements.isEmpty());
+    }
+
+    @Test
+    void releaseRemovesAProjectsPlacements() {
+        ObjectNode o = obj("a");
+        proj.addChild(o);
+        run();
+        core.release(proj);
+        assertTrue(port.placements.isEmpty());
+    }
+
+    @Test
+    void aPlacementOfAnotherFileIsReplacedKeepingItsId() {
+        ObjectNode o = obj("a");
+        proj.addChild(o);
+        run();
+        String id = o.placementIds().get(ObjectNode.BASE_CELL);
+        port.placements.put(id, new PlacementState(dir.resolve("other.litematic"), Vec3i.ZERO, Rot.NONE, Mirror.NONE, true, true, "a"));
+        run();
+        assertEquals(2, port.created);
+        assertEquals(dir.resolve("files").resolve("a.litematic"), port.read(id).file());
+    }
+
+    @Test
+    void anObjectWithAnUnreadableFileIsLeftAlone() {
+        core = new ReconcileCore(port, f -> null, new LasmCache(), dir);
+        ObjectNode o = obj("a");
+        proj.addChild(o);
+        run();
+        assertTrue(port.placements.isEmpty());
+    }
+
+    @Test
+    void projectObjectsCannotEscapeTheProjectFolder() {
+        ObjectNode o = new ObjectNode("evil", "../outside.litematic");
+        proj.addChild(o);
+        run();
+        assertTrue(port.placements.isEmpty());
+        ObjectNode abs = new ObjectNode("abs", dir.resolve("x.litematic").toAbsolutePath().toString());
+        proj.addChild(abs);
+        run();
+        assertTrue(port.placements.isEmpty());
+    }
+
+    @Test
+    void copiesFollowTheBasePlacementsEnabledAndRenderState() {
+        ObjectNode o = obj("a");
+        o.mods().add(array(2, 1));
+        proj.addChild(o);
+        run();
+        String base = o.placementIds().get(ObjectNode.BASE_CELL), copy = o.placementIds().get("1");
+        PlacementState b = port.read(base);
+        port.placements.put(base, new PlacementState(b.file(), b.origin(), b.rot(), b.mirror(), true, false, b.name()));   // render off in Litematica
+        run();
+        assertFalse(port.read(base).render(), "the base keeps what the player set");
+        assertFalse(port.read(copy).render(), "the copy follows it");
+    }
+
+    @Test
+    void wireObjectsAreNotRendered() {
+        ObjectNode o = obj("w");
+        o.setWire(true);
+        proj.addChild(o);
+        run();
+        assertFalse(port.read(o.placementIds().get(ObjectNode.BASE_CELL)).render());
+    }
+
+    // ------------------------------------------------------------------------------------------ rebuilds
+
+    @Test
+    void rebuildsAreBatchedAfterTheCreations() {
+        ObjectNode o = obj("a");
+        o.mods().add(array(3, 1));
+        proj.addChild(o);
+        run();   // tick 1: created
+        for (int i = 0; i < 19; i++) run();   // ticks 2..20
+        assertTrue(port.rebuilt.isEmpty());
+        run();   // tick 21
+        assertEquals(3, port.rebuilt.size());
+        assertEquals(new HashSet<>(o.placementIds().values()), new HashSet<>(port.rebuilt));
+        run();
+        assertEquals(3, port.rebuilt.size(), "once");
+    }
+
+    @Test
+    void aScheduledFullRebuildMarksEverythingManaged() {
+        String foreign = port.addForeign(dir.resolve("x.litematic"), Vec3i.ZERO);
+        ObjectNode o = obj("a");
+        proj.addChild(o);
+        core.scheduleFullRebuild(30);
+        for (int i = 0; i < 29; i++) run();
+        port.rebuilt.clear();
+        run();   // tick 30
+        assertEquals(List.of(o.placementIds().get(ObjectNode.BASE_CELL)), port.rebuilt);
+        assertFalse(port.rebuilt.contains(foreign));
+    }
+
+    @Test
+    void subRegionStatesAreCopiedToTheCopies() {
+        ObjectNode o = obj("a");
+        o.mods().add(array(2, 1));
+        proj.addChild(o);
+        for (int i = 0; i < 5; i++) run();
+        assertFalse(port.subRegionCopies.isEmpty());
+        assertTrue(port.subRegionCopies.get(0).startsWith(o.placementIds().get(ObjectNode.BASE_CELL) + ">"));
+    }
+
+    // ------------------------------------------------------------------------------------------ drift
+
+    @Test
+    void aMoveOutsideTheEditorIsAdoptedIntoTheModel() {
+        ObjectNode o = obj("a");
+        o.setTransform(at(1, 2, 3));
+        o.mods().add(array(2, 1));
+        proj.addChild(o);
+        run();
+        String base = o.placementIds().get(ObjectNode.BASE_CELL);
+        Transform before = o.transform();
+
+        port.moveExternally(base, new Vec3i(20, 5, 20), Rot.CW_180, Mirror.NONE);
+        ReconcileCore.Result r = run();
+        assertEquals(1, r.adopted());
+        assertEquals(new Transform(new Vec3i(20, 5, 20), Rot.CW_180, Mirror.NONE), o.transform());
+        assertEquals(1, changes.size());
+        assertEquals(o, changes.get(0).node());
+        assertEquals(before, changes.get(0).before());
+        assertEquals(o.transform(), changes.get(0).after());
+        assertEquals(new Vec3i(20, 5, 20), port.read(base).origin(), "the placement is not put back");
+        // the copy followed the new base: CW_180 turns the step (4,0,0) to (-4,0,0)
+        assertEquals(new Vec3i(16, 5, 20), port.read(o.placementIds().get("1")).origin());
+
+        ReconcileCore.Result again = run();
+        assertEquals(0, again.adopted());
+        assertEquals(1, changes.size());
+    }
+
+    @Test
+    void aMirrorChangeIsDriftToo() {
+        ObjectNode o = obj("a");
+        proj.addChild(o);
+        run();
+        port.moveExternally(o.placementIds().get(ObjectNode.BASE_CELL), Vec3i.ZERO, Rot.NONE, Mirror.LEFT_RIGHT);
+        run();
+        assertEquals(1, changes.size());
+        assertEquals(new Transform(Vec3i.ZERO, Rot.NONE, Mirror.LEFT_RIGHT).canonical(), o.transform());
+    }
+
+    @Test
+    void aMoveInsideAnAssemblyBecomesALocalTransform() {
+        AssemblyNode asm = new AssemblyNode("asm");
+        asm.setTransform(new Transform(new Vec3i(100, 0, 0), Rot.CW_90, Mirror.NONE));
+        ObjectNode o = obj("a");
+        o.setTransform(at(1, 0, 0));
+        asm.addChild(o);
+        proj.addChild(asm);
+        run();
+        PlacementState s = port.read(o.placementIds().get(ObjectNode.BASE_CELL));
+        assertEquals(new Vec3i(100, 0, 1), s.origin());
+        assertEquals(Rot.CW_90, s.rot());
+
+        port.moveExternally(o.placementIds().get(ObjectNode.BASE_CELL), new Vec3i(50, 0, 50), Rot.NONE, Mirror.NONE);
+        run();
+        assertEquals(1, changes.size());
+        assertEquals(new Transform(new Vec3i(50, 0, 50), Rot.NONE, Mirror.NONE), scene.worldTransform(o));
+        assertEquals(new Vec3i(50, 0, 50), port.read(o.placementIds().get(ObjectNode.BASE_CELL)).origin());
+    }
+
+    @Test
+    void anEditorMoveAndAnExternalMoveAreToldApart() {
+        ObjectNode o = obj("a");
+        proj.addChild(o);
+        run();
+        o.setTransform(at(7, 0, 0));
+        run();
+        assertTrue(changes.isEmpty());
+        port.moveExternally(o.placementIds().get(ObjectNode.BASE_CELL), new Vec3i(8, 0, 0), Rot.NONE, Mirror.NONE);
+        run();
+        assertEquals(1, changes.size());
+        o.setTransform(at(9, 0, 0));
+        run();
+        assertEquals(1, changes.size());
+        assertEquals(new Vec3i(9, 0, 0), port.read(o.placementIds().get(ObjectNode.BASE_CELL)).origin());
+    }
+
+    @Test
+    void afterAJoinTheModelWinsInAProjectAndThePlacementWinsInLoose() {
+        UUID p1 = UUID.randomUUID(), p2 = UUID.randomUUID();
+        Path file = dir.resolve("files").resolve("a.litematic");
+
+        ObjectNode projectObj = obj("a");
+        projectObj.setTransform(at(1, 1, 1));
+        projectObj.placementIds().put(ObjectNode.BASE_CELL, p1.toString());
+        proj.addChild(projectObj);
+        port.placements.put(p1.toString(), new PlacementState(file, new Vec3i(9, 9, 9), Rot.NONE, Mirror.NONE, true, true, "a"));
+
+        ObjectNode looseObj = new ObjectNode("l", dir.resolve("l.litematic").toString());
+        looseObj.setTransform(at(2, 2, 2));
+        looseObj.placementIds().put(ObjectNode.BASE_CELL, p2.toString());
+        scene.loose().addChild(looseObj);
+        port.placements.put(p2.toString(), new PlacementState(dir.resolve("l.litematic"), new Vec3i(8, 8, 8), Rot.NONE, Mirror.NONE, true, true, "l"));
+
+        run();
+        assertEquals(at(1, 1, 1), projectObj.transform());
+        assertEquals(new Vec3i(1, 1, 1), port.read(p1.toString()).origin());
+        assertEquals(at(8, 8, 8), looseObj.transform());
+        assertEquals(new Vec3i(8, 8, 8), port.read(p2.toString()).origin());
+        assertEquals(1, changes.size());
+        assertEquals(looseObj, changes.get(0).node());
+    }
+
+    @Test
+    void aLooseObjectWhosePlacementWasDeletedLeavesLoose() {
+        ObjectNode o = new ObjectNode("l", dir.resolve("l.litematic").toString());
+        o.mods().add(array(2, 1));
+        scene.loose().addChild(o);
+        run();
+        assertEquals(2, port.placements.size());
+        port.placements.remove(o.placementIds().get(ObjectNode.BASE_CELL));
+        run();
+        assertTrue(scene.loose().children().isEmpty());
+        assertEquals(List.of(o), removedNodes);
+        assertTrue(port.placements.isEmpty(), "its copies go too");
+    }
+
+    @Test
+    void aProjectObjectWhosePlacementWasDeletedIsMadeAgain() {
+        ObjectNode o = obj("a");
+        proj.addChild(o);
+        run();
+        String id = o.placementIds().get(ObjectNode.BASE_CELL);
+        port.placements.remove(id);
+        run();
+        assertEquals(List.of(o), proj.children());
+        assertNotNull(port.read(id), "same id again");
+        assertTrue(removedNodes.isEmpty());
+    }
+
+    // ------------------------------------------------------------------------------------------ linked assemblies
+
+    private Path writeLasm(int partX) throws IOException {
+        ObjectNode part = obj("part");
+        part.setTransform(at(partX, 0, 0));
+        AssemblyIo.Lasm l = new AssemblyIo.Lasm("tower");
+        l.nodes.add(part);
+        Path f = dir.resolve("files").resolve("tower.lasm");
+        AssemblyIo.write(l, f);
+        return f;
+    }
+
+    private AssemblyNode link(String name, Transform t) {
+        AssemblyNode a = new AssemblyNode(name);
+        a.setSource(new AssemblyNode.Link("files/tower.lasm"));
+        a.setTransform(t);
+        proj.addChild(a);
+        return a;
+    }
+
+    @Test
+    void linkedAssembliesGetOnePlacementPerInstanceAndPart() throws IOException {
+        writeLasm(2);
+        AssemblyNode a1 = link("t1", Transform.IDENTITY);
+        AssemblyNode a2 = link("t2", new Transform(new Vec3i(50, 0, 0), Rot.CW_180, Mirror.NONE));
+        run();
+        assertEquals(2, port.placements.size(), "the same .lasm linked twice gives two sets of placements");
+        assertEquals(Set.of(new Vec3i(2, 0, 0), new Vec3i(48, 0, 0)), origins());
+        assertTrue(a1.children().isEmpty() && a2.children().isEmpty(), "linked parts are not put into the model");
+        assertEquals(2, new HashSet<>(port.placements.keySet()).size());
+
+        ReconcileCore.Result r = run();
+        assertEquals(0, r.created() + r.updated() + r.removed());
+
+        a1.setHidden(true);
+        run();
+        assertEquals(Set.of(new Vec3i(48, 0, 0)), origins());
+        a1.setHidden(false);
+        run();
+        assertEquals(2, port.placements.size());
+
+        proj.removeChild(a2);
+        run();
+        assertEquals(Set.of(new Vec3i(2, 0, 0)), origins());
+    }
+
+    @Test
+    void aLinkedMoveOutsideTheEditorIsPutBack() throws IOException {
+        writeLasm(2);
+        link("t1", Transform.IDENTITY);
+        run();
+        String id = port.placements.keySet().iterator().next();
+        port.moveExternally(id, new Vec3i(99, 0, 0), Rot.NONE, Mirror.NONE);
+        run();
+        assertTrue(changes.isEmpty());
+        assertEquals(new Vec3i(2, 0, 0), port.read(id).origin());
+    }
+
+    @Test
+    void theLasmIsReadAgainWhenItChanges() throws IOException {
+        Path f = writeLasm(2);
+        link("t1", Transform.IDENTITY);
+        run();
+        assertEquals(Set.of(new Vec3i(2, 0, 0)), origins());
+        writeLasm(3);
+        Files.setLastModifiedTime(f, FileTime.fromMillis(Files.getLastModifiedTime(f).toMillis() + 10_000));
+        run();
+        assertEquals(Set.of(new Vec3i(3, 0, 0)), origins());
+        assertEquals(1, port.placements.size());
+    }
+
+    @Test
+    void aMissingLasmGivesNoPlacementsAndNoCrash() {
+        link("t1", Transform.IDENTITY);
+        run();
+        assertTrue(port.placements.isEmpty());
+    }
+
+    @Test
+    void linkedPartsInsideAssemblyTransformsComposeFromTheRoot() throws IOException {
+        writeLasm(2);
+        AssemblyNode outer = new AssemblyNode("outer");
+        outer.setTransform(at(0, 10, 0));
+        AssemblyNode inner = new AssemblyNode("inner");
+        inner.setSource(new AssemblyNode.Link("files/tower.lasm"));
+        inner.setTransform(at(5, 0, 0));
+        outer.addChild(inner);
+        proj.addChild(outer);
+        run();
+        assertEquals(Set.of(new Vec3i(7, 10, 0)), origins());
+        assertTrue(inner.children().isEmpty());
+    }
+}

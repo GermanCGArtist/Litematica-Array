@@ -1,5 +1,8 @@
 package dev.schemarray;
 
+import dev.schemarray.editor.core.ArrayModifier;
+import dev.schemarray.editor.core.ObjectNode;
+import dev.schemarray.editor.mc.Reconciler;
 import dev.schemarray.shape.mc.ShapePreview;
 import fi.dy.masa.litematica.data.DataManager;
 import fi.dy.masa.litematica.schematic.LitematicaSchematic;
@@ -59,6 +62,7 @@ public final class ArraySync {
             rebuildAt.add(ticks + 40);
             rebuildAt.add(ticks + 200);
         }
+        if (Reconciler.joining()) return;   // the editor looks at the placements first and takes over the arrays it owns
         Map<String, ArrayStore.Entry> arrays = ArrayStore.all();
         if (arrays.isEmpty()) return;
         SchematicPlacementManager mgr = DataManager.getSchematicPlacementManager();
@@ -69,6 +73,7 @@ public final class ArraySync {
 
         if (rebuildAt.remove((Integer) ticks)) {
             for (var e : arrays.entrySet()) {
+                if (Reconciler.ownerOfBase(e.getKey()) != null) continue;   // migrated: the reconciler owns it
                 SchematicPlacement parent = byId.get(e.getKey());
                 if (parent != null) mgr.markChunksForRebuild(parent);
                 for (String c : e.getValue().copies.values()) {
@@ -80,6 +85,7 @@ public final class ArraySync {
 
         boolean changed = false;
         for (String parentId : new ArrayList<>(arrays.keySet())) {
+            if (Reconciler.ownerOfBase(parentId) != null) continue;   // migrated: the reconciler owns it
             ArrayStore.Entry e = arrays.get(parentId);
             SchematicPlacement parent = byId.get(parentId);
             if (parent == null) {
@@ -257,6 +263,7 @@ public final class ArraySync {
     /** The placement whose array the config screen edits: the original, also when a copy is open. */
     public static SchematicPlacement original(SchematicPlacement p) {
         String parent = ArrayStore.parentOf(p.getHashId());
+        if (parent == null) parent = Reconciler.baseOfCopy(p.getHashId().toString());   // a copy the editor made
         if (parent == null) return p;
         for (SchematicPlacement o : DataManager.getSchematicPlacementManager().getAllSchematicsPlacements()) {
             if (o.getHashId().toString().equals(parent)) return o;
@@ -265,19 +272,51 @@ public final class ArraySync {
     }
 
     public static boolean isCopy(SchematicPlacement p) {
-        return ArrayStore.parentOf(p.getHashId()) != null;
+        return ArrayStore.parentOf(p.getHashId()) != null || Reconciler.baseOfCopy(p.getHashId().toString()) != null;
     }
 
     /** The modifiers of this placement's array (deep copies; empty = no array). */
     public static List<ArrayStore.Mod> mods(SchematicPlacement original) {
-        ArrayStore.Entry e = ArrayStore.get(original.getHashId());
+        ObjectNode node = Reconciler.ownerOfBase(original.getHashId().toString());
         List<ArrayStore.Mod> out = new ArrayList<>();
+        if (node != null) {   // migrated: the array lives in the editor's model now
+            for (var m : node.mods()) {
+                if (!(m instanceof ArrayModifier a)) continue;
+                ArrayStore.Mod c = new ArrayStore.Mod();
+                c.enabled = a.enabled;
+                c.count = a.count;
+                c.useRelative = a.useRelative;
+                c.relative = a.relative.clone();
+                c.useConstant = a.useConstant;
+                c.constant = a.constant.clone();
+                out.add(c);
+            }
+            return out;
+        }
+        ArrayStore.Entry e = ArrayStore.get(original.getHashId());
         if (e != null) for (ArrayStore.Mod m : e.mods) out.add(m.copy());
         return out;
     }
 
     /** Replaces the modifiers (a copy of the list is kept); the copies follow at once. */
     public static void setMods(SchematicPlacement original, List<ArrayStore.Mod> mods) {
+        ObjectNode node = Reconciler.ownerOfBase(original.getHashId().toString());
+        if (node != null) {   // migrated: edit the model, the reconciler makes the copies; other modifier kinds stay
+            List<dev.schemarray.editor.core.Modifier> next = new ArrayList<>();
+            for (ArrayStore.Mod m : mods) {
+                ArrayModifier a = new ArrayModifier();
+                a.enabled = m.enabled;
+                a.count = m.count;
+                a.useRelative = m.useRelative;
+                a.relative = m.relative.clone();
+                a.useConstant = m.useConstant;
+                a.constant = m.constant.clone();
+                next.add(a);
+            }
+            for (var m : node.mods()) if (!(m instanceof ArrayModifier)) next.add(m);
+            node.setMods(next);
+            return;
+        }
         ArrayStore.Entry e = ArrayStore.getOrCreate(original.getHashId());
         e.mods = new ArrayList<>();
         for (ArrayStore.Mod m : mods) e.mods.add(m.copy());
@@ -287,6 +326,13 @@ public final class ArraySync {
 
     /** Number of copies this array makes right now. */
     public static int copyCount(SchematicPlacement original) {
+        ObjectNode node = Reconciler.ownerOfBase(original.getHashId().toString());
+        if (node != null) {
+            List<ArrayModifier> arrays = new ArrayList<>();
+            for (var m : node.mods()) if (m instanceof ArrayModifier a) arrays.add(a);
+            long n = dev.schemarray.editor.core.ArrayCells.copyCountOf(arrays);
+            return n >= 1 && n <= MAX_COPIES ? (int) n : 0;
+        }
         ArrayStore.Entry e = ArrayStore.get(original.getHashId());
         if (e == null || !e.active()) return 0;
         return (int) copyCountOf(e.mods);
@@ -299,6 +345,12 @@ public final class ArraySync {
 
     /** All copies of this array, as one list (for the label). */
     public static List<String> copyIds(SchematicPlacement original) {
+        ObjectNode node = Reconciler.ownerOfBase(original.getHashId().toString());
+        if (node != null) {
+            List<String> out = new ArrayList<>();
+            for (var e : node.placementIds().entrySet()) if (!e.getKey().equals(ObjectNode.BASE_CELL)) out.add(e.getValue());
+            return out;
+        }
         ArrayStore.Entry e = ArrayStore.get(original.getHashId());
         return e == null ? List.of() : new ArrayList<>(e.copies.values());
     }
