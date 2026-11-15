@@ -5,20 +5,30 @@ along X, Y and Z, right in Litematica's placement configuration, with a live pre
 
 ## Use
 
-Open `M` → **Configure placement** → **Configure**. Right under the **Rotate** button there are three new rows:
+Open `M` -> **Configure placement** -> **Configure**. Right under the **Rotate** button there is an **Array...** button
+(it shows `Array (N copies)...` when an array is active). It opens the array screen, a clone of Blender's Array
+modifier: a stack of modifiers, applied top to bottom.
 
 ```
-Array   Copies       Gap
-X: [3    ][±]   [0    ][±]
-Y: [1    ][±]   [0    ][±]
-Z: [1    ][±]   [0    ][±]
+Array 1   [On] [^] [v] [Remove]
+Count: [ 5 ][+-]
+[x] Relative Offset  X [1.0] Y [0.0] Z [0.0]
+[x] Constant Offset  X [0  ][+-] Y [-1 ][+-] Z [0  ][+-]
+[Add Array]  Total: 4 copies                         [Done]
 ```
 
-- **Copies**: how many along that axis. `1` = no copies, a negative number goes the other way.
-- **Gap**: blocks between the copies. `0` = touching, negative = overlap.
-- The **±** buttons work like Litematica's own: left click +1, right click −1, Shift ×8, Alt ×4.
+- **Count**: copies of the stack so far, including the original. `1` = no copies from this modifier.
+- **Relative Offset**: step as a fraction of the bounding box so far (`1` = exactly one box, `0.5` = half, negative = the other way).
+- **Constant Offset**: step in blocks (negative = the other way). Added to the relative offset when both are on.
+- **On/Off**, **^ / v** (order) and **Remove** manage the stack. With several modifiers the copies form a grid
+  (count1 x count2 x ...); each modifier measures the box that the modifiers above it have built, as in Blender.
+- The **+-** buttons work like Litematica's own: left click +1, right click -1, Shift x8, Alt x4. The mouse wheel scrolls
+  when there are more modifiers than fit on the screen. Every edit applies live.
 
-The axes are the schematic's own, so rotating or mirroring the placement turns the whole array with it.
+Example, a staircase: **Count 5, Relative X 1.0, Constant Y -1** (each copy one box further along X and one block lower).
+
+The axes are the schematic's own, so rotating or mirroring the placement turns the whole array with it. Arrays saved
+by older versions (counts and gaps per axis) are converted on first load.
 
 The copies are ordinary Litematica placements of the same schematic, so they render, print and verify like any
 placement. They follow the original live (move, nudge, rotate, mirror, enable/disable, rendering and sub-regions
