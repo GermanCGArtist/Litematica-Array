@@ -93,7 +93,7 @@ public final class ArraySync {
                 continue;
             }
             changed |= sync(mgr, parent, e, byId);
-            if (!e.active() && e.copies.isEmpty()) { ArrayStore.remove(parentId); changed = true; }
+            if (!e.active() && e.copies.isEmpty() && e.mods.isEmpty()) { ArrayStore.remove(parentId); changed = true; }
         }
         if (changed) ArrayStore.save();
     }
@@ -118,8 +118,69 @@ public final class ArraySync {
         return new Vec3i(max[0] - min[0] + 1, max[1] - min[1] + 1, max[2] - min[2] + 1);
     }
 
-    private static String cell(int x, int y, int z) {
-        return x + "," + y + "," + z;
+    /** Copies an array of these modifiers makes: the product of the enabled counts, minus the original. */
+    public static long copyCountOf(List<ArrayStore.Mod> mods) {
+        long n = 1;
+        for (ArrayStore.Mod m : mods) {
+            if (!m.enabled) continue;
+            n *= Math.max(1, m.count);
+            if (n > 1_000_000_000L) return n;
+        }
+        return n - 1;
+    }
+
+    /** Whether this modifier list is allowed (not more than MAX_COPIES copies). */
+    public static boolean allowed(List<ArrayStore.Mod> mods) {
+        return copyCountOf(mods) <= MAX_COPIES;
+    }
+
+    /**
+     * The step of every enabled modifier (Blender semantics): relative * the bounding box size so far, plus the
+     * constant offset; the box then grows to hold the copies of that modifier.
+     */
+    static List<int[]> steps(List<ArrayStore.Mod> mods, Vec3i size) {
+        long[] min = {0, 0, 0}, max = {size.getX() - 1, size.getY() - 1, size.getZ() - 1};
+        List<int[]> out = new ArrayList<>();
+        for (ArrayStore.Mod m : mods) {
+            if (!m.enabled) continue;
+            int[] step = new int[3];
+            for (int a = 0; a < 3; a++) {
+                if (m.useRelative) step[a] += (int) Math.round(m.relative[a] * (max[a] - min[a] + 1));
+                if (m.useConstant) step[a] += m.constant[a];
+                long last = (long) (Math.max(1, m.count) - 1) * step[a];
+                min[a] = Math.min(min[a], min[a] + last);
+                max[a] = Math.max(max[a], max[a] + last);
+            }
+            out.add(step);
+        }
+        return out;
+    }
+
+    /** Cell key ("i,j,k", one index per enabled modifier) to local offset, for every copy (not the original). */
+    static Map<String, int[]> cells(List<ArrayStore.Mod> mods, Vec3i size) {
+        Map<String, int[]> out = new java.util.LinkedHashMap<>();
+        if (!allowed(mods) || copyCountOf(mods) < 1) return out;
+        List<ArrayStore.Mod> on = new ArrayList<>();
+        for (ArrayStore.Mod m : mods) if (m.enabled) on.add(m);
+        List<int[]> steps = steps(mods, size);
+        int k = on.size();
+        int[] idx = new int[k];
+        while (true) {
+            boolean zero = true;
+            int[] off = new int[3];
+            StringBuilder key = new StringBuilder();
+            for (int i = 0; i < k; i++) {
+                if (idx[i] != 0) zero = false;
+                if (i > 0) key.append(',');
+                key.append(idx[i]);
+                for (int a = 0; a < 3; a++) off[a] += idx[i] * steps.get(i)[a];
+            }
+            if (!zero) out.put(key.toString(), off);
+            int i = k - 1;
+            while (i >= 0 && ++idx[i] >= Math.max(1, on.get(i).count)) idx[i--] = 0;
+            if (i < 0) break;
+        }
+        return out;
     }
 
     private static boolean sync(SchematicPlacementManager mgr, SchematicPlacement parent, ArrayStore.Entry e, Map<String, SchematicPlacement> byId) {
@@ -127,28 +188,20 @@ public final class ArraySync {
         if (schematic == null) return false;
         boolean changed = false;
 
-        // which cells there should be (the original itself is cell 0,0,0)
-        Set<String> want = new HashSet<>();
-        long n = (long) Math.abs(e.counts[0]) * Math.abs(e.counts[1]) * Math.abs(e.counts[2]);
-        if (n > 1 && n <= MAX_COPIES + 1) {
-            for (int y = 0; y < Math.abs(e.counts[1]); y++)
-                for (int z = 0; z < Math.abs(e.counts[2]); z++)
-                    for (int x = 0; x < Math.abs(e.counts[0]); x++)
-                        if (x != 0 || y != 0 || z != 0) want.add(cell(x, y, z));
-        }
+        // which cells there should be (the original itself is the all-zero cell)
+        Vec3i size = size(schematic);
+        Map<String, int[]> want = cells(e.mods, size);
 
         // cells that are no longer wanted
         for (var it = e.copies.entrySet().iterator(); it.hasNext(); ) {
             var c = it.next();
-            if (want.contains(c.getKey())) continue;
+            if (want.containsKey(c.getKey())) continue;
             SchematicPlacement cp = byId.get(c.getValue());
             if (cp != null) mgr.removeSchematicPlacement(cp, false);
             it.remove();
             changed = true;
         }
 
-        Vec3i size = size(schematic);
-        int[] step = {size.getX() + e.gaps[0], size.getY() + e.gaps[1], size.getZ() + e.gaps[2]};
         BlockPos origin = parent.getOrigin();
         Rotation rot = parent.getRotation();
         Mirror mir = parent.getMirror();
@@ -156,13 +209,10 @@ public final class ArraySync {
         Map<String, Boolean> subStates = new HashMap<>();
         for (SubRegionPlacement s : parent.getAllSubRegionsPlacements()) subStates.put(s.getName(), s.isEnabled());
 
-        for (String key : want) {
-            String[] k = key.split(",");
-            int cx = Integer.parseInt(k[0]), cy = Integer.parseInt(k[1]), cz = Integer.parseInt(k[2]);
-            int lx = cx * step[0] * Integer.signum(e.counts[0]);
-            int ly = cy * step[1] * Integer.signum(e.counts[1]);
-            int lz = cz * step[2] * Integer.signum(e.counts[2]);
-            BlockPos at = origin.offset(transform(lx, ly, lz, mir, rot));
+        for (var cellEntry : want.entrySet()) {
+            String key = cellEntry.getKey();
+            int[] off = cellEntry.getValue();
+            BlockPos at = origin.offset(transform(off[0], off[1], off[2], mir, rot));
 
             String id = e.copies.get(key);
             SchematicPlacement cp = id == null ? null : byId.get(id);
@@ -218,23 +268,33 @@ public final class ArraySync {
         return ArrayStore.parentOf(p.getHashId()) != null;
     }
 
-    public static int[] counts(SchematicPlacement original) {
+    /** The modifiers of this placement's array (deep copies; empty = no array). */
+    public static List<ArrayStore.Mod> mods(SchematicPlacement original) {
         ArrayStore.Entry e = ArrayStore.get(original.getHashId());
-        return e == null ? new int[]{1, 1, 1} : e.counts.clone();
+        List<ArrayStore.Mod> out = new ArrayList<>();
+        if (e != null) for (ArrayStore.Mod m : e.mods) out.add(m.copy());
+        return out;
     }
 
-    public static int[] gaps(SchematicPlacement original) {
-        ArrayStore.Entry e = ArrayStore.get(original.getHashId());
-        return e == null ? new int[]{0, 0, 0} : e.gaps.clone();
-    }
-
-    /** Sets one count (axis 0..2) or gap; the copies follow on the next tick. */
-    public static void set(SchematicPlacement original, boolean gap, int axis, int value) {
+    /** Replaces the modifiers (a copy of the list is kept); the copies follow at once. */
+    public static void setMods(SchematicPlacement original, List<ArrayStore.Mod> mods) {
         ArrayStore.Entry e = ArrayStore.getOrCreate(original.getHashId());
-        if (gap) e.gaps[axis] = value;
-        else e.counts[axis] = value == 0 ? 1 : value;
+        e.mods = new ArrayList<>();
+        for (ArrayStore.Mod m : mods) e.mods.add(m.copy());
         ArrayStore.save();
         tick(Minecraft.getInstance());
+    }
+
+    /** Number of copies this array makes right now. */
+    public static int copyCount(SchematicPlacement original) {
+        ArrayStore.Entry e = ArrayStore.get(original.getHashId());
+        if (e == null || !e.active()) return 0;
+        return (int) copyCountOf(e.mods);
+    }
+
+    /** Number of copies a candidate modifier list would make (refuse it above MAX_COPIES). */
+    public static long copyCount(List<ArrayStore.Mod> mods) {
+        return copyCountOf(mods);
     }
 
     /** All copies of this array, as one list (for the label). */
