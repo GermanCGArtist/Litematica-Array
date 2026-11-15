@@ -112,3 +112,14 @@ mods share them.
   placement. Worth a line in the Push tooltip.
 - **Heavymatica areas never affect blocks**, but they can be arrayed and sit in assemblies; the amber note in
   Properties is the only reminder.
+
+## Resolved (user, 2026-11-15)
+mockup-v2 is the design. The open questions are settled as:
+1. The gizmo, ring, name tags, snap label and box-select rectangle are drawn with ImGui's background draw list (projected points). Only the depth-tested boxes and outlines use Minecraft rendering.
+2. There's no "enter assembly" in 2.0. Parts are selected from the tree.
+3. Esc with nothing left to cancel does nothing. Only F6 leaves editor mode.
+4. F2 renames in editor mode, since vanilla keys are blocked there.
+5. In the tree, Shift+click toggles (the same as in the viewport) and Ctrl+click selects a range.
+6. Moving an object to another project moves its file when nothing else references it, and copies it otherwise.
+7. The "From Litematica?" card shows until the user hides it.
+8. Inter SemiBold is bundled in cg-uihost.
