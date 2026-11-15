@@ -38,6 +38,12 @@ across restarts in `config/schemarray/arrays.json`.
 Limits: up to 1024 copies per array; the material list of the original counts one copy; sub-regions moved inside
 the original are not copied over (only switched on/off).
 
+### Pasting arrays
+
+In Litematica's Paste schematic mode, pasting the original placement pastes the whole array (the original plus all its
+enabled copies) as one task. Pasting a copy pastes only that copy. Litematica's Grid Paste mode, which does nothing on
+its own, now behaves like Paste mode and so pastes the whole array too.
+
 ### Folders
 
 Litematica's placement list (`M` → **Schematic placements**) can be sorted into folders. **New folder** (bottom left)
