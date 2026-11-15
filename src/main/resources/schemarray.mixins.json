@@ -10,6 +10,8 @@
     "GuiMainMenuMixin",
     "GuiPlacementConfigurationMixin",
     "GuiSchematicPlacementsListMixin",
+    "KeyCallbackHotkeysMixin",
+    "SchematicPlacementManagerPasteMixin",
     "WidgetContainerAccessor",
     "WidgetListBaseAccessor",
     "WidgetListBaseDragMixin",
