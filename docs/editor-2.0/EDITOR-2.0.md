@@ -151,3 +151,9 @@ The `API_VERSION` goes to 2. The 1.5 list-entry API keeps working: its entries s
 | 7.x | M7 | S/H | ports to 26.1.2 / 26.2 / 26.3, releases | Per the 1.x porting notes (scancode keys on 26.3, `mc.gui.screen()` on 26.2+). |
 
 **Known risk:** until WP 6.4 lands, Manhattan's own ImGui and `cg-uihost` both claim the GLFW callbacks when both mods are installed. During development we test Litematica Array 2.0 without Manhattan, or the host stays off while Manhattan's workspace is open. WP 6.4 removes the conflict.
+
+## 10. Notes from implementation
+- **(WP 1.1) Base placement key:** `ObjectNode.BASE_CELL = "base"` is the key of the object's own placement in `placementIds`. Array cells keep their 1.x "i,j,k" keys.
+- **(WP 1.1) Front order:** `front = 0` means unnumbered and sorts behind everything; ties break by id.
+- **(WP 1.1) Session state:** `ProjectNode.path` and `active` are not saved.
+- **(WP 1.1) Linked assemblies:** children are not saved. Whoever resolves links (WP 1.3/4.1) loads the `.lasm` and must give each linked child an **instance-scoped id**, `Ids.derived(instanceId + ":" + childId)`, because the same `.lasm` linked twice would otherwise give duplicate ids.
