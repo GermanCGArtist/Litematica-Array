@@ -40,6 +40,29 @@ public final class Reconciler {
     private static int sinceJoin;
     private static boolean ready;
     private static boolean failed;
+
+    private static Map<String, Map<String, String>> lastRuntime = Map.of();
+    private static int runtimeDirtyAt = -1;
+
+    private static Path runtimeFile(String world) {
+        return RuntimeStore.file(FabricLoader.getInstance().getConfigDir().resolve("schemarray"), world);
+    }
+
+    /** Writes the runtime placements when they changed: at most every 5 s, or at once with {@code force}. */
+    private static void saveRuntime(boolean force) {
+        String w = pm.world();
+        if (core == null || w == null) return;
+        Map<String, Map<String, String>> now = core.runtimeIds();
+        if (now.equals(lastRuntime)) {
+            runtimeDirtyAt = -1;
+            return;
+        }
+        if (runtimeDirtyAt < 0) runtimeDirtyAt = tick;
+        if (!force && tick - runtimeDirtyAt < 100) return;
+        RuntimeStore.write(runtimeFile(w), now);
+        lastRuntime = now;
+        runtimeDirtyAt = -1;
+    }
     private static String reportedFailure;
 
     private static volatile Map<String, ObjectNode> baseOwners = Map.of();
@@ -125,6 +148,7 @@ public final class Reconciler {
             core.reconcile(pm.scene(), world, dim, tick);
             pm.tick();
             publishOwners();
+            saveRuntime(false);
         } catch (Throwable t) {
             fail("reconcile", t);
         }
@@ -134,6 +158,7 @@ public final class Reconciler {
     public static void onDisconnect() {
         if (pm == null) return;
         try {
+            if (ready && !failed) saveRuntime(true);
             pm.leaveWorld();
         } catch (Throwable t) {
             System.out.println("[SchematicArray] cannot save the projects: " + t);
@@ -153,6 +178,8 @@ public final class Reconciler {
             Set<String> ids = adapter.allHashIds();
             pm.enterWorld(world, dim, ids, id -> infoOf(adapter.read(id)));
             core.reset();
+            lastRuntime = RuntimeStore.read(runtimeFile(world));
+            core.restoreRuntime(lastRuntime);
             core.scheduleFullRebuild(tick + 40, tick + 200);
             ready = true;
         } catch (Throwable t) {

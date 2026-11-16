@@ -109,11 +109,44 @@ public final class ReconcileCore {
         lasms.clear();
     }
 
+    /** Hash ids of the restored runtime placements still to be claimed by the first pass (the rest are leftovers). */
+    private Set<String> restored = new HashSet<>();
+
+    /**
+     * The runtime placements (parts of linked assemblies and of array cells): key to cell to hash id, empty entries
+     * left out. The caller saves it so a restart can {@link #restoreRuntime} it.
+     */
+    public Map<String, Map<String, String>> runtimeIds() {
+        Map<String, Map<String, String>> out = new java.util.TreeMap<>();
+        for (var e : linkedIds.entrySet()) if (!e.getValue().isEmpty()) out.put(e.getKey().toString(), new java.util.TreeMap<>(e.getValue()));
+        return out;
+    }
+
+    /**
+     * Gives back the runtime placements of an earlier session (call after {@link #reset}, before the first
+     * {@link #reconcile}). The first pass adopts each one whose key is wanted again, so nothing is recreated, and
+     * removes those whose key is not wanted any more. Only ids listed here are ever touched.
+     */
+    public void restoreRuntime(Map<String, Map<String, String>> saved) {
+        for (var e : saved.entrySet()) {
+            UUID key;
+            try {
+                key = UUID.fromString(e.getKey());
+            } catch (IllegalArgumentException ex) {
+                continue;
+            }
+            Map<String, String> m = linkedIds.computeIfAbsent(key, k -> new LinkedHashMap<>());
+            m.putAll(e.getValue());
+            restored.addAll(e.getValue().values());
+        }
+    }
+
     /** Forgets everything remembered between calls (a new world). Placements are left alone. */
     public void reset() {
         lastSeen.clear();
         prevModelIds = new HashSet<>();
         linkedIds.clear();
+        restored = new HashSet<>();
         batch.clear();
         batchAt = 0;
         fullRebuildAt.clear();
@@ -175,6 +208,18 @@ public final class ReconcileCore {
             }
         }
         prevModelIds = r.modelIds;
+        if (!restored.isEmpty()) {
+            for (String id : restored) {
+                if (!r.modelIds.contains(id) && r.existing.remove(id)) {
+                    port.remove(id);
+                    lastSeen.remove(id);
+                    r.removed++;
+                }
+            }
+            linkedIds.values().forEach(m -> m.values().removeIf(id -> restored.contains(id) && !r.modelIds.contains(id)));
+            linkedIds.values().removeIf(Map::isEmpty);
+            restored = new HashSet<>();
+        }
 
         if (batchAt != 0 && tick >= batchAt) {
             for (String id : batch) if (r.existing.contains(id)) port.markRebuild(id);

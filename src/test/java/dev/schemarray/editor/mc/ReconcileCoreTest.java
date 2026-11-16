@@ -763,4 +763,61 @@ class ReconcileCoreTest {
         run();
         assertEquals(0, port.placements.size(), "nothing has a size: no cells, and no crash");
     }
+
+    // ------------------------------------------------------------------------------------------ runtime placements across a restart
+
+    private ReconcileCore restarted(java.util.Map<String, java.util.Map<String, String>> saved) {
+        ReconcileCore c = new ReconcileCore(port, f -> size, new LasmCache(), dir);
+        c.restoreRuntime(saved);
+        return c;
+    }
+
+    @Test
+    void aRestartAdoptsTheSavedRuntimePlacementsWithoutDuplicatesOrRecreation() throws IOException {
+        writeLasm(2);
+        link("t1", at(0, 0, 0)).mods().add(array(2, 1.0));
+        arrayedAssembly(3);
+        run();
+        int placements = port.placements.size(), created = port.created;
+        assertTrue(placements > 4);
+        var saved = core.runtimeIds();
+        assertFalse(saved.isEmpty());
+
+        core = restarted(saved);        // a new game: the placements are still in Litematica, the runtime map is empty
+        run();
+        run();
+        assertEquals(placements, port.placements.size(), "no duplicates");
+        assertEquals(created, port.created, "nothing is created again");
+        assertEquals(0, port.removed);
+    }
+
+    @Test
+    void aSavedRuntimePlacementWhoseKeyIsNotWantedAnyMoreIsRemovedAndOthersAreLeftAlone() throws IOException {
+        writeLasm(2);
+        AssemblyNode a = link("t1", at(0, 0, 0));
+        a.mods().add(array(3, 1.0));
+        run();
+        int before = port.placements.size();
+        var saved = core.runtimeIds();
+        String foreign = port.create(dir.resolve("files/x.litematic"), new Vec3i(9, 9, 9), Rot.NONE, Mirror.NONE, "player's own", true, true, null);
+
+        ((ArrayModifier) a.mods().get(0)).count = 2;     // the edit happened while the game was closed
+        core = restarted(saved);
+        run();
+        assertEquals(before - 1 + 1, port.placements.size() , "one cell gone, the foreign placement untouched");
+        assertTrue(port.placements.containsKey(foreign));
+        assertEquals(Set.of(new Vec3i(2, 0, 0), new Vec3i(6, 0, 0), new Vec3i(9, 9, 9)), origins());
+    }
+
+    @Test
+    void leftoversOfAKeyThatNoNodeUsesAreRemoved() throws IOException {
+        writeLasm(2);
+        AssemblyNode a = link("t1", at(0, 0, 0));
+        run();
+        var saved = core.runtimeIds();
+        proj.removeChild(a);                              // deleted while the game was closed
+        core = restarted(saved);
+        run();
+        assertEquals(0, port.placements.size());
+    }
 }
