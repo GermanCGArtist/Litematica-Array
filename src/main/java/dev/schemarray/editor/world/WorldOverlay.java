@@ -66,7 +66,8 @@ public final class WorldOverlay {
         List<Box> overlaps = new ArrayList<>();
         for (Overlaps.Overlap ov : s.allOverlaps()) if (s.lostTo(ov.loser(), ov.winner()) != 0) overlaps.add(ov.box());
         List<Object[]> cutters = cutters(s);
-        if (lines.isEmpty() && preview == null && overlaps.isEmpty() && cutters.isEmpty()) return;
+        boolean externals = hasExternals(s);
+        if (lines.isEmpty() && preview == null && overlaps.isEmpty() && cutters.isEmpty() && !externals) return;
         try (var ignored = mc.levelRenderer.collectPerFrameGizmos()) {
             for (Line l : lines) {
                 var p = Gizmos.cuboid(l.box(), GizmoStyle.stroke(argb(l.rgb(), l.alpha()), l.width()));
@@ -74,7 +75,61 @@ public final class WorldOverlay {
             }
             for (Box b : overlaps) overlapVolume(b);
             for (Object[] c : cutters) ghostBox((Box) c[0], (Boolean) c[1] ? BOOL : Theme.GUTTER, (Boolean) c[1] ? 0.9f : 0.6f, 1.5f, 0f);
+            if (externals) drawExternals(s);
             if (preview != null) renderPreview(preview);
+        }
+    }
+
+    // ------------------------------------------------------------------ objects of other mods (API 2)
+
+    private static boolean hasExternals(EditorSession s) {
+        for (Node n : s.scene().allNodes()) if (n instanceof dev.schemarray.editor.core.ExternalNode && !TreeModel.effectivelyHidden(n)) return true;
+        return false;
+    }
+
+    private static final java.util.Set<String> FAILED_TYPES = new java.util.HashSet<>();
+
+    /** What an object type draws with: dashed or solid lines and faces through Minecraft gizmos. */
+    private static final class Drawer implements dev.schemarray.api.OverlayDrawer {
+        @Override
+        public void box(Box box, int rgb, float alpha, boolean dashed) {
+            if (dashed) ghostBox(box, rgb, alpha, 1.5f, 0f);
+            else Gizmos.cuboid(aabb(box), GizmoStyle.stroke(argb(rgb, alpha), 1.5f)).setAlwaysOnTop();
+        }
+
+        @Override
+        public void line(double x1, double y1, double z1, double x2, double y2, double z2, int rgb, float alpha, boolean dashed) {
+            if (dashed) dashed(new Vec3(x1, y1, z1), new Vec3(x2, y2, z2), argb(rgb, alpha), 1.5f);
+            else Gizmos.line(new Vec3(x1, y1, z1), new Vec3(x2, y2, z2), argb(rgb, alpha), 1.5f).setAlwaysOnTop();
+        }
+
+        @Override
+        public void fill(Box box, int rgb, float alpha) {
+            fillFaces(aabb(box), argb(rgb, alpha));
+        }
+    }
+
+    private static void drawExternals(EditorSession s) {
+        var scene = s.scene();
+        WorldBoxes wb = s.boxes();
+        Drawer d = new Drawer();
+        for (Node n : scene.allNodes()) {
+            if (!(n instanceof dev.schemarray.editor.core.ExternalNode x) || TreeModel.effectivelyHidden(x)) continue;
+            var type = dev.schemarray.api.ObjectTypes.get(x.typeId());
+            if (type == null) {                                     // the mod is not installed: a grey dashed box, the data stays
+                for (Box b : wb.objectBoxes(x.id())) ghostBox(b, Theme.GUTTER, 0.8f, 1.5f, 0.04f);
+                continue;
+            }
+            boolean sel = s.selection.isSelected(x.id());
+            var world = scene.worldTransform(x);
+            try {
+                type.renderOutline(x.data(), world, d, sel);
+                for (var c : dev.schemarray.api.ObjectTypes.cellsOf(x).values()) {
+                    type.renderOutline(x.data(), new dev.schemarray.editor.core.Transform(world.apply(c), world.rot(), world.mirror()), d, sel);
+                }
+            } catch (RuntimeException | LinkageError e) {
+                if (FAILED_TYPES.add(x.typeId())) System.out.println("[SchematicArray] object type " + x.typeId() + " failed to draw: " + e);
+            }
         }
     }
 
@@ -218,8 +273,12 @@ public final class WorldOverlay {
                 }
             }
         }
-        if (fillAlpha > 0) {
-            int fill = argb(rgb, fillAlpha);
+        if (fillAlpha > 0) fillFaces(a, argb(rgb, fillAlpha));
+    }
+
+    private static void fillFaces(AABB a, int fill) {
+        double[] lo = {a.minX, a.minY, a.minZ}, hi = {a.maxX, a.maxY, a.maxZ};
+        {
             for (int axis = 0; axis < 3; axis++) {
                 int u = (axis + 1) % 3, v = (axis + 2) % 3;
                 for (int side = 0; side < 2; side++) {
@@ -296,6 +355,12 @@ public final class WorldOverlay {
                 out.add(new Line(aabb(ow.union()), rgb, alpha, width, false));
                 if (!locked && !ghost) out.add(new Line(aabb(ow.union()), rgb, isActive ? 0.30f : 0.20f, 1f, true));
                 for (Box cell : wb.cellBoxes(id)) out.add(new Line(aabb(cell), rgb, 0.5f, 1f, false));     // the copies of an assembly array
+            } else if (n instanceof dev.schemarray.editor.core.ExternalNode) {
+                List<Box> boxes = wb.objectBoxes(id);
+                if (boxes.isEmpty()) continue;
+                out.add(new Line(aabb(boxes.get(0)), rgb, alpha, width, false));
+                if (!locked && !ghost) out.add(new Line(aabb(boxes.get(0)), rgb, isActive ? 0.30f : 0.20f, 1f, true));
+                for (int i = 1; i < boxes.size(); i++) out.add(new Line(aabb(boxes.get(i)), rgb, 0.5f, 1f, false));
             } else {
                 Box u = wb.unionOf(scene, List.of(id));                              // folder, project, Loose: what they hold
                 if (u != null) out.add(new Line(aabb(u), rgb, 0.35f, 1f, false));

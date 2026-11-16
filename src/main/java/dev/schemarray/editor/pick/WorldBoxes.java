@@ -5,6 +5,7 @@ import dev.schemarray.editor.core.ArrayModifier;
 import dev.schemarray.editor.core.AssemblyBounds;
 import dev.schemarray.editor.core.AssemblyNode;
 import dev.schemarray.editor.core.Box;
+import dev.schemarray.editor.core.ExternalNode;
 import dev.schemarray.editor.core.Modifier;
 import dev.schemarray.editor.core.Node;
 import dev.schemarray.editor.core.ObjectNode;
@@ -48,6 +49,15 @@ public final class WorldBoxes {
         Map<UUID, List<Box>> lists = new LinkedHashMap<>();
         Map<UUID, Node> nodes = new LinkedHashMap<>();
         for (Node n : scene.allNodes()) {
+            if (n instanceof ExternalNode x) {          // objects of other mods: boxes from their type, a block when it is missing
+                if (TreeModel.effectivelyHidden(x)) continue;
+                List<Box> mine = dev.schemarray.api.ObjectTypes.worldBoxes(scene, x);
+                objects.put(x.id(), mine);
+                Node owner = scene.ownerOf(x);
+                lists.computeIfAbsent(owner.id(), k -> new ArrayList<>()).addAll(mine);
+                nodes.put(owner.id(), owner);
+                continue;
+            }
             if (!(n instanceof ObjectNode o) || o.missing() || TreeModel.effectivelyHidden(o)) continue;
             Vec3i size = sizeOf.apply(o);
             if (size == null || size.x() <= 0 || size.y() <= 0 || size.z() <= 0) continue;

@@ -7,6 +7,7 @@ import dev.schemarray.editor.core.ArrayCells;
 import dev.schemarray.editor.core.ArrayModifier;
 import dev.schemarray.editor.core.AssemblyNode;
 import dev.schemarray.editor.core.BooleanModifier;
+import dev.schemarray.editor.core.ExternalNode;
 import dev.schemarray.editor.core.FolderNode;
 import dev.schemarray.editor.core.HasFront;
 import dev.schemarray.editor.core.LooseNode;
@@ -156,6 +157,7 @@ public final class SceneWindow {
             }
             first = false;
         }
+        drawLegacyRows(s, tree);
         // drag scroll
         if (dragIds != null) {
             float my = ImGui.getMousePosY();
@@ -307,6 +309,35 @@ public final class SceneWindow {
 
     // ------------------------------------------------------------------------------------------ rows
 
+    /**
+     * The rows other mods add through the 1.x list API ({@code SchematicArrayApi.registerListEntries}), under Loose:
+     * read-only, dimmed, with their visibility shown. They are managed in Litematica's own placement list.
+     */
+    private static void drawLegacyRows(EditorSession s, TreeModel tree) {
+        if (tree.isFiltering() || !tree.isOpen(s.scene().loose())) return;
+        List<dev.schemarray.api.ListEntry> entries = dev.schemarray.api.SchematicArrayApi.allEntries();
+        if (entries.isEmpty()) return;
+        float sc = Ui.s();
+        for (dev.schemarray.api.ListEntry e : entries) {
+            float rowH = 24 * sc;
+            float x0 = ImGui.getCursorScreenPosX(), y0 = ImGui.getCursorScreenPosY(), w = ImGui.getContentRegionAvailX();
+            ImDrawList dl = ImGui.getWindowDrawList();
+            ImGui.pushID("legacy:" + e.id());
+            ImGui.invisibleButton("##legacyrow", w, rowH);
+            boolean hovered = ImGui.isItemHovered();
+            if (hovered) dl.addRectFilled(x0, y0, x0 + w, y0 + rowH, Ui.c(0xffffff, 0.03f), 4 * sc);
+            float tx = x0 + 14 * sc, iconCx = tx + 16 * sc + 2 * sc + 7 * sc, nameX = iconCx + 7 * sc + 6 * sc;
+            EditorIcons.draw(dl, "areas", iconCx, y0 + rowH * 0.5f, 7 * sc, Ui.c(Theme.GUTTER, 0.8f));
+            float fh = ImGui.getFontSize();
+            String tag = e.isRenderingEnabled() ? "1.x" : "1.x hidden";
+            float tagW = ImGui.calcTextSizeX(tag);
+            dl.addText(x0 + w - 8 * sc - tagW, y0 + (rowH - fh) * 0.5f, Ui.c(Theme.GUTTER), tag);
+            dl.addText(nameX, y0 + (rowH - fh) * 0.5f, Ui.c(Theme.DIM, e.isRenderingEnabled() ? 1f : 0.6f), Ui.fitEnd(e.name(), Math.max(20 * sc, w - (nameX - x0) - tagW - 16 * sc)));
+            if (hovered) ImGui.setTooltip("Added by another mod through the 1.x list API. Read-only here: manage it in Litematica's placement list.");
+            ImGui.popID();
+        }
+    }
+
     private static int iconColor(Kind k) {
         return switch (k) {
             case PROJECT -> Theme.ACCENT;
@@ -346,7 +377,10 @@ public final class SceneWindow {
             if (p.sync() == ProjectNode.Sync.SHARED) out.add(new Badge("", "", Theme.OK, 1f, Theme.OK, false, "Shared on Syncmatica", true));
             return out;
         }
-        if (r.missing()) {
+        if (r.missing() && n instanceof ExternalNode x) {
+            out.add(new Badge("", "MOD", Theme.GUTTER, 0.3f, Theme.DIM, true, "Missing mod: " + x.typeId() + " is not installed. The object keeps its data "
+                    + "and can still be moved, hidden and deleted.", false));
+        } else if (r.missing()) {
             out.add(new Badge("", "!", Theme.ERR, 0.2f, Theme.ERR, true, "Placement not found. Litematica no longer has this placement. It comes back "
                     + "when the placement does; Delete removes it from the scene.", false));
         }
@@ -530,7 +564,7 @@ public final class SceneWindow {
         }
         ImGui.popFont();
 
-        if (hovered && r.missing() && !inEye) {
+        if (hovered && r.missing() && n instanceof ObjectNode && !inEye) {
             boolean overBadge = false;
             if (!overBadge) ImGui.setTooltip("Placement not found: Litematica no longer has it. It is greyed out and not drawn. "
                     + "Right-click > Delete removes it from the scene.");
@@ -715,6 +749,38 @@ public final class SceneWindow {
 
     // ------------------------------------------------------------------------------------------ modals
 
+    /** "Shared projects": the [LA2] manifests Syncmatica lists on the server; a click downloads and opens one. */
+    private static void drawSharedProjects(EditorSession s) {
+        var sync = dev.schemarray.editor.sync.SyncService.get();
+        if (!sync.installed()) return;
+        float sc = Ui.s();
+        ImGui.dummy(0, 4 * sc);
+        Ui.label("Shared projects (Syncmatica)");
+        if (!sync.usable()) {
+            Ui.dim(sync.reason());
+            return;
+        }
+        if (!sync.connected()) {
+            Ui.dim("Not connected to a server with Syncmatica.");
+            return;
+        }
+        var list = sync.sharedProjectList();
+        if (sync.receiving()) Ui.smallDim(sync.receiveStatus());
+        if (list.isEmpty()) {
+            Ui.dim("No shared projects on this server.");
+            return;
+        }
+        ImGui.beginChild("##sharedlist", 320 * sc, Math.min(160 * sc, Math.max(40 * sc, list.size() * 28 * sc)), true);
+        for (var r : list) {
+            String name = dev.schemarray.editor.sync.SyncManifest.projectName(r.name());
+            if (ImGui.selectable(name + "##shared" + r.id()) && !sync.receiving()) {
+                sync.receive(r, s.schematicsDir());
+                ImGui.closeCurrentPopup();
+            }
+        }
+        ImGui.endChild();
+    }
+
     private static void drawModals(EditorSession s) {
         float sc = Ui.s();
         boolean any = false;
@@ -761,6 +827,7 @@ public final class SceneWindow {
                 }
             }
             ImGui.endChild();
+            drawSharedProjects(s);
             if (ImGui.button("Cancel", 100 * sc, 0) || ImGui.isKeyPressed(ImGuiKey.Escape)) ImGui.closeCurrentPopup();
             ImGui.endPopup();
         }

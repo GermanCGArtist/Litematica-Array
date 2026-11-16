@@ -155,11 +155,13 @@ final class Snapshot {
             Transform t = x.transform();
             JsonObject data = x.data().deepCopy();
             String type = x.typeId();
+            List<Modifier> mods = copyMods(x.mods());
             return () -> {
                 common.run();
                 x.setTransform(t);
                 x.setData(data.deepCopy());
                 x.setTypeId(type);
+                x.setMods(copyMods(mods));
             };
         }
         if (n instanceof FolderNode f) {

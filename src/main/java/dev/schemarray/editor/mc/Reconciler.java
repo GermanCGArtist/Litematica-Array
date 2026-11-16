@@ -91,7 +91,9 @@ public final class Reconciler {
         core = new ReconcileCore(adapter, SchematicInfo.shared(), new LasmCache(), DataManager.getSchematicsBaseDirectory().toAbsolutePath().normalize());
         pm.setCloseHook(core::release);
         core.setDerived(DerivedFiles.shared());
+        core.setLooseCache(FabricLoader.getInstance().getConfigDir().resolve("schemarray").resolve("editor-loose"));
         DerivedFiles.shared().bind(core);
+        dev.schemarray.api.ObjectTypes.setSceneSource(() -> pm == null ? null : pm.scene());
         pm.setSaveHook(DerivedFiles.shared()::cleanup);
     }
 
@@ -117,6 +119,11 @@ public final class Reconciler {
     public static void reloadLinks() {
         init();
         core.reloadLinks();
+    }
+
+    /** The planning half of the reconciler (null before the first tick): the cells of the last pass, for Syncmatica. */
+    public static ReconcileCore core() {
+        return core;
     }
 
     /** Whether the reconciler runs (a world is entered and nothing failed). */
@@ -150,6 +157,7 @@ public final class Reconciler {
         try {
             DerivedFiles.shared().tick(pm.scene(), world, dim, tick);
             core.reconcile(pm.scene(), world, dim, tick);
+            dev.schemarray.editor.sync.SyncService.get().tick(pm.scene(), core, pm, world, dim, tick);
             pm.tick();
             publishOwners();
             saveRuntime(false);

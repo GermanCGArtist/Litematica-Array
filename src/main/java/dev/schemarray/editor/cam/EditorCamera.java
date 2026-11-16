@@ -94,6 +94,14 @@ public final class EditorCamera {
     public float yaw() { return sYaw; }
     public float pitch() { return sPitch; }
     public Vec3 target() { return new Vec3(sx, sy, sz); }
+
+    /** Moves the orbit target (the Top view click); the shown pose eases to it. */
+    public void setTarget(double x, double y, double z) {
+        tx = x;
+        ty = y;
+        tz = z;
+    }
+
     public float distance() { return sDist; }
     /** Fly speed multiplier, {@link #SPEED_MIN} to {@link #SPEED_MAX}. */
     public float speed() { return speed; }

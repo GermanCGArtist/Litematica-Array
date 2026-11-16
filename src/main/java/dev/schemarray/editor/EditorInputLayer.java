@@ -8,6 +8,7 @@ import dev.schemarray.editor.view.ContextMenus;
 import dev.schemarray.editor.view.EditorChrome;
 import dev.schemarray.editor.view.PropertiesWindow;
 import dev.schemarray.editor.view.SceneWindow;
+import dev.schemarray.editor.view.TopViewWindow;
 import dev.schemarray.editor.view.Toasts;
 import dev.schemarray.editor.view.TransformHud;
 import dev.schemarray.editor.world.WorldOverlay;
@@ -72,6 +73,7 @@ public final class EditorInputLayer implements UiLayer {
         if (!s.windowsHidden) {
             if (s.showScene) SceneWindow.draw(s);
             if (s.showProperties) PropertiesWindow.draw(s);
+            if (s.showTopView) TopViewWindow.draw(s);
         }
         s.resetLayout = false;
         EditorChrome.draw(s);

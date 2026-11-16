@@ -240,6 +240,9 @@ final class NodeJson {
                 n.setTransform(readTransform(f.object("transform"), where));
                 JsonObject data = f.object("data");
                 n.setData(data == null ? new JsonObject() : data);
+                List<Modifier> em = new ArrayList<>();
+                for (Modifier m : readMods(f.take("mods"), where)) if (m instanceof ArrayModifier) em.add(m);
+                n.setMods(em);
                 node = n;
             }
             default -> throw new FormatException(where + ": unknown node type '" + type + "'");
@@ -350,6 +353,7 @@ final class NodeJson {
             o.addProperty("typeId", x.typeId());
             o.add("transform", transform(x.transform()));
             o.add("data", x.data().deepCopy());
+            if (!x.mods().isEmpty()) o.add("mods", mods(x.mods()));
         } else {
             throw new IllegalArgumentException("a " + n.getClass().getSimpleName() + " cannot be saved as a child node");
         }

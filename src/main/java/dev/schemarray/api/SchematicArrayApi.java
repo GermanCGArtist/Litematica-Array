@@ -15,7 +15,7 @@ import java.util.function.Consumer;
 public final class SchematicArrayApi {
     private SchematicArrayApi() {}
 
-    public static final int API_VERSION = 1;
+    public static final int API_VERSION = 2;
 
     /** A button on the Shape Generator screen next to the save controls. */
     public record ShapeAction(String label, String hover, Consumer<ShapeActionContext> action) {}
@@ -40,6 +40,22 @@ public final class SchematicArrayApi {
     /** Adds one button to every folder row; it gets the folder and the ids of the entries inside (subfolders included). */
     public static void registerFolderAction(String buttonLabel, String hoverText, Consumer<FolderActionContext> action) {
         if (buttonLabel != null && action != null) FOLDER_ACTIONS.add(new FolderAction(buttonLabel, hoverText, action));
+    }
+
+    /**
+     * (API 2) Registers a kind of scene object (see {@link SceneObjectType}): it shows up in the editor's Add menu and
+     * its objects live in projects, assemblies and Loose. Call from the client thread at startup.
+     */
+    public static void registerObjectType(SceneObjectType type) {
+        ObjectTypes.register(type);
+    }
+
+    /**
+     * (API 2) Every placed copy of the objects of one type in the editor's open scene (world transform and a copy of
+     * the data), for exports. Empty when no editor session is running.
+     */
+    public static List<SceneObjectView> objectsOfType(String typeId) {
+        return ObjectTypes.viewsOf(typeId);
     }
 
     /** Rebuilds the placement list on the next tick (call after your entries changed). */

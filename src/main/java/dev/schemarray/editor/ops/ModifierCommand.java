@@ -65,6 +65,9 @@ abstract class ModifierCommand extends BaseCommand {
      * project, or would make two nodes cut each other in a loop.
      */
     static Refusal problem(Scene scene, Node owner, List<Modifier> mods) {
+        if (owner instanceof dev.schemarray.editor.core.ExternalNode) {
+            for (Modifier m : mods) if (!(m instanceof ArrayModifier)) return new Refusal(Nodes.q(owner) + " takes arrays only (it never changes blocks)");
+        }
         List<ArrayModifier> arrays = new ArrayList<>();
         for (Modifier m : mods) {
             if (m instanceof ArrayModifier a) {

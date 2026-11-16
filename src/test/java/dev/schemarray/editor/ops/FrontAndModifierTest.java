@@ -3,6 +3,7 @@ package dev.schemarray.editor.ops;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.schemarray.editor.core.ArrayModifier;
@@ -182,7 +183,8 @@ class FrontAndModifierTest {
     @Test
     void modifierRefusals() {
         ExternalNode area = fx.ext(fx.p, "area", 0, 0, 0);
-        assertNotNull(fx.refusal(new AddModifier(area.id(), array(2, 1), -1)));
+        assertNull(fx.refusal(new AddModifier(area.id(), array(2, 1), -1)), "an object of another mod can be arrayed");
+        assertNotNull(fx.refusal(new AddModifier(area.id(), new BooleanModifier(), -1)), "but never cut");
         AssemblyNode l = fx.asm(fx.p, "l", 0, 0, 0);
         l.setSource(new AssemblyNode.Link("files/l.lasm"));
         ObjectNode part = fx.obj(l, "lp", 0, 0, 0);
