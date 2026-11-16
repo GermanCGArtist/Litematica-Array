@@ -87,6 +87,12 @@ public final class EditorMode {
         active = false;                       // first: the grab mixin lets grabMouse() through from here on
         level = null;
         EditorCamera.get().cancelGesture();
+        try {
+            EditorSession s = EditorSession.get();
+            if (s != null) s.gizmo.cancel();                 // a running drag or typed transform ends like Esc
+        } catch (Throwable ignored) {
+            // no session (Litematica missing)
+        }
         UiHost.captureCursor(false);
         mc.options.setCameraType(savedCameraType);
         releaseGameplayKeys(mc);

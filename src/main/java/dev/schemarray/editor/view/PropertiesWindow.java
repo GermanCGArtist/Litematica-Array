@@ -453,10 +453,11 @@ public final class PropertiesWindow {
             return;
         }
         Theme.push(UiHost.theme().numM());
-        ImGui.text(String.format(Locale.ROOT, "%,d", info.blockCount()));
+        long blocks = info.blockCount();                 // counted on a worker: -1 until it is ready
+        ImGui.text(blocks < 0 ? "…" : String.format(Locale.ROOT, "%,d", blocks));
         ImGui.popFont();
         ImGui.sameLine();
-        Ui.smallDim("counted · " + info.size().x() + "×" + info.size().y() + "×" + info.size().z());
+        Ui.smallDim((blocks < 0 ? "counting · " : "counted · ") + info.size().x() + "×" + info.size().y() + "×" + info.size().z());
     }
 
     private static void frontSection(EditorSession s, Node n) {

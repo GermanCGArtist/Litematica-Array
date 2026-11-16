@@ -65,6 +65,8 @@ public final class ReconcileCore {
     private final Path looseBase;
     private DriftListener listener = DriftListener.NONE;
     private int budget = BUDGET;
+    /** Local view (runtime only, never saved): the owners that stay visible; null = everything. */
+    private Set<UUID> localOnly;
 
     /** Base placement id to the transform this class last wrote or saw. */
     private final Map<String, Transform> lastSeen = new HashMap<>();
@@ -84,6 +86,15 @@ public final class ReconcileCore {
 
     public void setListener(DriftListener l) {
         this.listener = l == null ? DriftListener.NONE : l;
+    }
+
+    /**
+     * Local view: only these owners (ids of objects or assemblies, as {@code Scene.ownerOf} gives them) stay
+     * placed; the others in projects are treated as hidden until this is cleared with null. Loose objects are not
+     * affected (their placement is Litematica's own, and removing it would mark them missing).
+     */
+    public void setLocalView(Set<UUID> owners) {
+        localOnly = owners == null ? null : Set.copyOf(owners);
     }
 
     public void setBudget(int budget) {
@@ -174,6 +185,8 @@ public final class ReconcileCore {
     private void visit(Node n, boolean off, ProjectNode proj, Run r) {
         boolean o = off || n.hidden();
         if (n instanceof ProjectNode p) proj = p;
+        if (!o && localOnly != null && proj != null && (n instanceof ObjectNode || n instanceof AssemblyNode a0 && a0.isLinked())
+                && !localOnly.contains(r.scene.ownerOf(n).id())) o = true;
         if (n instanceof ObjectNode ob) {
             object(new Slot(ob.placementIds()), ob, o, r.scene.worldTransform(ob), proj, r, false);
         } else if (n instanceof AssemblyNode a && a.isLinked()) {

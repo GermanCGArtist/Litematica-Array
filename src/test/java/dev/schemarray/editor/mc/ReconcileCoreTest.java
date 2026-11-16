@@ -613,4 +613,26 @@ class ReconcileCoreTest {
         assertEquals(Set.of(new Vec3i(7, 10, 0)), origins());
         assertTrue(inner.children().isEmpty());
     }
+
+    // ------------------------------------------------------------------------------------------ local view
+
+    @Test
+    void localViewKeepsOnlyTheListedOwnersPlacedAndComesBack() {
+        ObjectNode a = obj("a"), b = obj("b");
+        proj.addChild(a);
+        proj.addChild(b);
+        run();
+        assertEquals(2, port.placements.size());
+        String idA = a.placementIds().get(ObjectNode.BASE_CELL);
+
+        core.setLocalView(Set.of(a.id()));
+        run();
+        assertEquals(1, port.placements.size());
+        assertTrue(port.placements.containsKey(idA));
+        assertFalse(b.hidden(), "local view is not saved state: the node itself is untouched");
+
+        core.setLocalView(null);
+        run();
+        assertEquals(2, port.placements.size());
+    }
 }

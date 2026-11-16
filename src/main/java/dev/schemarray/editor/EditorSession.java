@@ -8,7 +8,10 @@ import dev.schemarray.editor.core.Overlaps;
 import dev.schemarray.editor.core.ProjectNode;
 import dev.schemarray.editor.core.Scene;
 import dev.schemarray.editor.core.Vec3i;
+import dev.schemarray.editor.gizmo.Pivots;
 import dev.schemarray.editor.mc.ExternalChange;
+import dev.schemarray.editor.ops.Move;
+import dev.schemarray.editor.world.Gizmo;
 import dev.schemarray.editor.mc.ProjectManager;
 import dev.schemarray.editor.mc.Reconciler;
 import dev.schemarray.editor.mc.SchematicInfo;
@@ -106,7 +109,15 @@ public final class EditorSession {
 
     public boolean windowsHidden;
     public boolean showScene = true, showProperties = true;
-    public boolean snap, localView;
+    /** Snapping toolbar toggle (Ctrl inverts it while dragging). Saved in the UI config. */
+    public boolean snap;
+    /** Local view is on (see {@link #toggleLocalView()}); runtime only. */
+    public boolean localView;
+    /** Pivot mode of the toolbar dropdown. Saved in the UI config. */
+    public Pivots.Mode pivotMode = Pivots.Mode.MEDIAN;
+    /** The move gizmo, ring, typed transforms and box select. */
+    public final Gizmo gizmo = new Gizmo(this);
+    private Set<UUID> localOwners;
 
     /** UI requests the windows pick up on their next frame. */
     public UUID renameRequest, scrollToRow, addSchematicParent;
@@ -130,7 +141,82 @@ public final class EditorSession {
     private EditorSession() {
         actions = new EditorActions(this::undoStack, selection, new HostImpl());
         loadConfig();
+        snap = flag("snap", false);
+        try {
+            pivotMode = Pivots.Mode.valueOf(config.getProperty("pivot", Pivots.Mode.MEDIAN.name()));
+        } catch (IllegalArgumentException e) {
+            pivotMode = Pivots.Mode.MEDIAN;
+        }
         sync();
+    }
+
+    /** Saves the snap toggle and the pivot mode (call after the toolbar changed one). */
+    public void saveToolbarState() {
+        config.setProperty("pivot", pivotMode.name());
+        setFlag("snap", snap);
+    }
+
+    // ------------------------------------------------------------------------------------------ pivot, lock, local view
+
+    /** The pivot block of a selection under the current pivot mode, or null when none of it has a visible box. */
+    public Vec3i pivotOf(List<UUID> ids) {
+        WorldBoxes wb = boxes();
+        Scene sc = scene();
+        List<Box> boxes = new ArrayList<>();
+        for (UUID id : ids) {
+            Box b = wb.unionOf(sc, List.of(id));
+            if (b != null) boxes.add(b);
+        }
+        if (boxes.isEmpty()) return null;
+        UUID a = selection.active();
+        Box active = a == null || !ids.contains(a) ? null : wb.unionOf(sc, List.of(a));
+        return Pivots.compute(pivotMode, boxes, active);
+    }
+
+    /** True when the selection cannot be moved (it is, or holds, a part of a linked assembly): the gizmo shows disabled. */
+    public boolean selectionLocked() {
+        List<UUID> ids = selection.ids();
+        if (ids.isEmpty()) return false;
+        return new Move(ids, new Vec3i(1, 0, 0)).check(context()).isPresent();
+    }
+
+    /**
+     * Local view (/): only the owners of the selected objects stay placed. Lightest way that works: the Reconciler
+     * gets a runtime filter ({@code ReconcileCore.setLocalView}), so nothing is saved and nothing in Litematica's own
+     * toggles changes; the other placements are removed and come back when it is switched off. The boxes follow, so
+     * picking and the gizmo only see what is visible.
+     */
+    public void toggleLocalView() {
+        if (localOwners != null) {
+            setLocalOwners(null);
+            return;
+        }
+        Set<UUID> owners = new HashSet<>();
+        Scene sc = scene();
+        for (UUID id : selection.ids()) {
+            Node n = sc.byId(id);
+            if (n == null) continue;
+            for (Node x : n.subtree()) if (x instanceof ObjectNode) owners.add(sc.ownerOf(x).id());
+            if (n instanceof dev.schemarray.editor.core.AssemblyNode) owners.add(sc.ownerOf(n).id());
+        }
+        if (owners.isEmpty()) {
+            toast(ToastQueue.Level.INFO, "Select an object first, then / isolates it");
+            return;
+        }
+        setLocalOwners(owners);
+    }
+
+    private void setLocalOwners(Set<UUID> owners) {
+        localOwners = owners;
+        localView = owners != null;
+        Reconciler.setLocalView(owners);
+        invalidateBoxes();
+    }
+
+    private boolean visibleInLocalView(ObjectNode o) {
+        if (localOwners == null) return true;
+        Scene sc = scene();
+        return sc.projectOf(o) == null || localOwners.contains(sc.ownerOf(o).id());   // Loose objects are not filtered
     }
 
     // ------------------------------------------------------------------------------------------ accessors
@@ -176,6 +262,8 @@ public final class EditorSession {
         if (now == scene) return;
         if (schematicsDir == null) schematicsDir = DataManager.getSchematicsBaseDirectory().toAbsolutePath().normalize();
         scene = now;
+        gizmo.cancel();
+        if (localOwners != null) setLocalOwners(null);          // a new world: the filter's ids do not exist there
         port = new NioFileSystemPort(schematicsDir);
         ctx = new EditContext(scene, port, new ChangeSink() {
             @Override
@@ -260,7 +348,7 @@ public final class EditorSession {
         long now = System.nanoTime();
         if (boxes == null || boxesAt == 0 || now - boxesAt > 100_000_000L) {
             Scene sc = scene();
-            boxes = new WorldBoxes(sc, this::sizeOf);
+            boxes = new WorldBoxes(sc, o -> visibleInLocalView(o) ? sizeOf(o) : null);
             boxesAt = now;
             computeOverlaps(sc);
         }
@@ -336,6 +424,10 @@ public final class EditorSession {
     public boolean onKey(int key, int mods) {
         boolean ctrl = (mods & (GLFW.GLFW_MOD_CONTROL | GLFW.GLFW_MOD_SUPER)) != 0;
         boolean shift = (mods & GLFW.GLFW_MOD_SHIFT) != 0, alt = (mods & GLFW.GLFW_MOD_ALT) != 0;
+        if (gizmo.modal()) {                       // a gesture is running: its keys only (DESIGN 12.4)
+            gizmo.onKey(key, mods);
+            return true;
+        }
         if (ctrl) {
             switch (key) {
                 case GLFW.GLFW_KEY_Z -> {
@@ -368,18 +460,25 @@ public final class EditorSession {
         }
         switch (key) {
             case GLFW.GLFW_KEY_W -> tool = Tool.SELECT;
-            case GLFW.GLFW_KEY_G -> tool = Tool.MOVE;
-            case GLFW.GLFW_KEY_R -> tool = Tool.ROTATE;
+            case GLFW.GLFW_KEY_G -> {
+                tool = Tool.MOVE;
+                if (!selection.isEmpty()) gizmo.startTypedMove(0);
+            }
+            case GLFW.GLFW_KEY_R -> {
+                tool = Tool.ROTATE;
+                if (!selection.isEmpty()) gizmo.startTypedRotate();
+            }
             case GLFW.GLFW_KEY_M -> actions.run("t.mirror");
-            case GLFW.GLFW_KEY_B -> toast(ToastQueue.Level.INFO, "Box select: coming in a later 2.0 alpha");
+            case GLFW.GLFW_KEY_B -> gizmo.armBox();
             case GLFW.GLFW_KEY_A -> {
                 if (shift) addMenuRequest = true;
                 else actions.run(alt ? "select.none" : "select.all");
             }
             case GLFW.GLFW_KEY_H -> actions.run(alt ? "show.hidden" : "hide");
             case GLFW.GLFW_KEY_D -> {
-                if (shift) actions.run("duplicate");
-                else if (alt) actions.run("dup.linked");
+                if (selection.isEmpty()) return false;
+                if (shift) gizmo.startTypedMove(1);          // the copy starts as a typed move (the preview shows where it lands)
+                else if (alt) gizmo.startTypedMove(2);
                 else return false;
             }
             case GLFW.GLFW_KEY_X, GLFW.GLFW_KEY_DELETE -> {
@@ -389,7 +488,7 @@ public final class EditorSession {
             case GLFW.GLFW_KEY_PAGE_DOWN -> actions.run(shift ? "front.back" : "front.backward");
             case GLFW.GLFW_KEY_F2 -> actions.run("rename");
             case GLFW.GLFW_KEY_TAB -> windowsHidden = !windowsHidden;
-            case GLFW.GLFW_KEY_SLASH -> toast(ToastQueue.Level.INFO, "Local view: coming in a later 2.0 alpha");
+            case GLFW.GLFW_KEY_SLASH -> toggleLocalView();
             case GLFW.GLFW_KEY_F, GLFW.GLFW_KEY_KP_DECIMAL -> actions.run("frame");
             default -> {
                 return false;
@@ -478,6 +577,27 @@ public final class EditorSession {
         @Override
         public void toggleWindows() {
             windowsHidden = !windowsHidden;
+        }
+
+        @Override
+        public Vec3i pivot(List<UUID> ids) {
+            return pivotOf(ids);
+        }
+
+        @Override
+        public void startMove() {
+            tool = Tool.MOVE;
+            gizmo.startTypedMove(0);
+        }
+
+        @Override
+        public void startBoxSelect() {
+            gizmo.armBox();
+        }
+
+        @Override
+        public void toggleLocalView() {
+            EditorSession.this.toggleLocalView();
         }
 
         @Override

@@ -201,8 +201,7 @@ class UiLogicTest {
         assertNull(find(menu, "mod.realise"), "no realise without an array");
         assertTrue(find(menu, "front.front").enabled());
         assertNull(find(menu, "asm.breakup"));
-        assertFalse(find(menu, "t.move").enabled());
-        assertEquals(MenuModel.LATER, find(menu, "t.move").tip());
+        assertTrue(find(menu, "t.move").enabled());
         assertTrue(find(menu, "delete").danger());
 
         o.setMods(List.of(new ArrayModifier()));

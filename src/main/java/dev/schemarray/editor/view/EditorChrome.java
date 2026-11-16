@@ -15,7 +15,9 @@ import dev.schemarray.editor.core.Modifier;
 import dev.schemarray.editor.core.Node;
 import dev.schemarray.editor.core.ObjectNode;
 import dev.schemarray.editor.core.ProjectNode;
+import dev.schemarray.editor.gizmo.Pivots;
 import dev.schemarray.editor.ui.MenuModel;
+import dev.schemarray.editor.world.Gizmo;
 import imgui.ImDrawList;
 import imgui.ImGui;
 import imgui.ImGuiViewport;
@@ -139,13 +141,14 @@ public final class EditorChrome {
 
         Btn add = new Btn("add", "plus", "Add", "Shift A", false, s != null, "Add (Shift A)");
         Btn sel = new Btn("sel", "cursor", "Select", "W", s != null && s.tool() == Tool.SELECT, s != null, "Select tool");
-        Btn mov = new Btn("mov", "move", "Move", "G", s != null && s.tool() == Tool.MOVE, s != null, "Move tool (the gizmo comes in a later 2.0 alpha)");
-        Btn rot = new Btn("rot", "rotate", "Rotate", "R", s != null && s.tool() == Tool.ROTATE, s != null, "Rotate tool (the gizmo comes in a later 2.0 alpha)");
-        Btn box = new Btn("box", "box", "Box", "B", false, false, "Box select. " + MenuModel.LATER);
+        Btn mov = new Btn("mov", "move", "Move", "G", s != null && s.tool() == Tool.MOVE, s != null, "Move tool: drag the gizmo, or press G and type an amount");
+        Btn rot = new Btn("rot", "rotate", "Rotate", "R", s != null && s.tool() == Tool.ROTATE, s != null, "Rotate tool: click or drag the ring, or press R and type degrees");
+        Btn box = new Btn("box", "box", "Box", "B", s != null && s.gizmo.modal() && s.gizmo.hint() == Gizmo.Hint.BOX, s != null, "Box select: drag a rectangle (Shift adds, Ctrl subtracts)");
         boolean hasSel = s != null && !s.selection.isEmpty();
-        Btn mir = new Btn("mir", "mirror", null, "M", false, hasSel, hasSel ? "Mirror X (M)" : "Mirror X: nothing selected");
-        Btn snap = new Btn("snap", "magnet", "Snap", null, false, false, "Snap. " + MenuModel.LATER);
-        Btn local = new Btn("local", "local", null, "/", false, false, "Local view. " + MenuModel.LATER);
+        boolean canMirror = hasSel && !s.selectionLocked();
+        Btn mir = new Btn("mir", "mirror", null, "M", false, canMirror, canMirror ? "Mirror X (M)" : hasSel ? "Mirror X: the selection is locked" : "Mirror X: nothing selected");
+        Btn snap = new Btn("snap", "magnet", "Snap", null, s != null && s.snap, s != null, "Snap faces to other objects while dragging (hold Ctrl to invert)");
+        Btn local = new Btn("local", "local", null, "/", s != null && s.localView, s != null, s != null && s.localView ? "Leave local view (/)" : "Local view: only the selection (/)");
         var undo = s == null ? null : s.undoStack();
         boolean canUndo = undo != null && undo.canUndo(), canRedo = undo != null && undo.canRedo();
         Btn und = new Btn("undo", "undo", null, null, false, canUndo, canUndo ? "Undo " + undo.undoLabel().orElse("") + " (Ctrl Z)" : "Nothing to undo");
@@ -218,22 +221,31 @@ public final class EditorChrome {
                 ImGui.sameLine();
                 if (btn(rot, labels, caps, sc, h)) s.setTool(Tool.ROTATE);
                 ImGui.sameLine();
-                btn(box, labels, caps, sc, h);
+                if (btn(box, labels, caps, sc, h)) s.gizmo.armBox();
                 // 4. mirror
                 ImGui.sameLine(0, sep);
                 if (btn(mir, labels, caps, sc, h)) s.actions.run("t.mirror");
                 if (!overflow) {
                     // 5. snap, pivot, local view
                     ImGui.sameLine(0, sep);
-                    btn(snap, labels, caps, sc, h);
+                    if (btn(snap, labels, caps, sc, h)) {
+                        s.snap = !s.snap;
+                        s.saveToolbarState();
+                    }
                     ImGui.sameLine();
-                    ImGui.beginDisabled();
                     ImGui.setNextItemWidth(comboW);
-                    if (ImGui.beginCombo("##pivot", "Median")) ImGui.endCombo();
-                    ImGui.endDisabled();
-                    Ui.tooltip("Pivot. " + MenuModel.LATER);
+                    if (ImGui.beginCombo("##pivot", s.pivotMode.label)) {
+                        for (Pivots.Mode m : Pivots.Mode.values()) {
+                            if (ImGui.selectable(m.label, m == s.pivotMode)) {
+                                s.pivotMode = m;
+                                s.saveToolbarState();
+                            }
+                        }
+                        ImGui.endCombo();
+                    }
+                    Ui.tooltip("Pivot: where the gizmo sits and what rotate and mirror turn about");
                     ImGui.sameLine();
-                    btn(local, labels, caps, sc, h);
+                    if (btn(local, labels, caps, sc, h)) s.toggleLocalView();
                     // 6. undo / redo
                     ImGui.sameLine(0, sep);
                     if (btn(und, false, false, sc, h)) s.actions.undo();
@@ -299,11 +311,20 @@ public final class EditorChrome {
         if (ImGui.beginPopup("##overflow")) {
             s.popupOpen = true;
             var undo = s.undoStack();
-            ImGui.beginDisabled();
-            ImGui.menuItem("Snap");
-            ImGui.menuItem("Local view", "/");
-            ImGui.endDisabled();
-            Ui.tooltip(MenuModel.LATER);
+            if (ImGui.menuItem("Snap", "", s.snap)) {
+                s.snap = !s.snap;
+                s.saveToolbarState();
+            }
+            if (ImGui.beginMenu("Pivot")) {
+                for (Pivots.Mode m : Pivots.Mode.values()) {
+                    if (ImGui.menuItem(m.label, "", m == s.pivotMode)) {
+                        s.pivotMode = m;
+                        s.saveToolbarState();
+                    }
+                }
+                ImGui.endMenu();
+            }
+            if (ImGui.menuItem("Local view", "/", s.localView)) s.toggleLocalView();
             ImGui.separator();
             if (ImGui.menuItem("Undo", "Ctrl Z", false, undo.canUndo())) s.actions.undo();
             if (ImGui.menuItem("Redo", "Ctrl Shift Z", false, undo.canRedo())) s.actions.redo();
@@ -328,7 +349,8 @@ public final class EditorChrome {
             ImGui.textWrapped("Navigate: hold the middle mouse button to orbit, Shift + middle to pan, the wheel zooms toward the cursor. "
                     + "Hold the right mouse button and use W A S D, Q and E to fly; a short right click opens the menu.");
             Ui.section("Keys");
-            String[][] keys = {{"W G R", "select / move / rotate tool"}, {"M", "mirror X"}, {"Shift D / Alt D", "duplicate / linked duplicate"},
+            String[][] keys = {{"W G R", "select / move / rotate tool"}, {"G / R, X Y Z, digits", "typed move / rotate, Enter"},
+                    {"B", "box select (Shift adds)"}, {"/", "local view"}, {"M", "mirror X"}, {"Shift D / Alt D", "duplicate / linked duplicate"},
                     {"Ctrl G", "create assembly"}, {"H / Alt H", "hide / show all"}, {"A / Alt A", "select all / none"},
                     {"F", "frame selection"}, {"F2", "rename"}, {"X / Delete", "delete"}, {"PgUp PgDn", "front order"},
                     {"Ctrl Z / Ctrl Shift Z", "undo / redo"}, {"Ctrl S", "save all projects"}, {"Tab", "hide windows"}};
@@ -336,7 +358,7 @@ public final class EditorChrome {
                 ImGui.pushStyleColor(ImGuiCol.Text, Ui.c(Theme.ACCENT));
                 ImGui.text(k[0]);
                 ImGui.popStyleColor();
-                ImGui.sameLine(150 * sc);
+                ImGui.sameLine(190 * sc);
                 ImGui.text(k[1]);
             }
             Ui.section("Non-destructive and baked");
@@ -384,12 +406,37 @@ public final class EditorChrome {
         ImGui.popStyleVar(3);
     }
 
+    private static final List<Hint> HINTS_HOVER_AXIS = List.of(Hint.of("move along the axis", "drag"), Hint.of("turn snapping off", "Ctrl"));
+    private static final List<Hint> HINTS_HOVER_RING = List.of(Hint.of("+90°", "click"), Hint.of("-90°", "Shift", "click"), Hint.of("rotate in 90° steps", "drag"));
+    private static final List<Hint> HINTS_DRAG_MOVE = List.of(Hint.of("snap off", "Ctrl"), Hint.of("cancel", "RMB", "Esc"), Hint.of("place", "release"));
+    private static final List<Hint> HINTS_DRAG_RING = List.of(Hint.of("cancel", "RMB", "Esc"), Hint.of("apply", "release"));
+    private static final List<Hint> HINTS_TYPED = List.of(Hint.of("number", "0-9"), Hint.of("axis", "X", "Y", "Z"), Hint.of("negate", "-"),
+            Hint.of("edit", "Backspace"), Hint.of("confirm", "Enter"), Hint.of("cancel", "Esc"));
+    private static final List<Hint> HINTS_BOX = List.of(Hint.of("select", "drag"), Hint.of("add", "Shift"), Hint.of("subtract", "Ctrl"), Hint.of("cancel", "Esc"));
+
     private static List<Hint> hintsFor(EditorSession s) {
         if (EditorCamera.get().isFlying()) return HINTS_FLY;
         if (SceneWindow.isRenaming()) return HINTS_RENAME;
         if (SceneWindow.isDragging()) return HINTS_TREE_DRAG;
-        if (s != null && !s.selection.isEmpty()) return HINTS_SELECTED;
-        return HINTS_IDLE;
+        List<Hint> base = s != null && !s.selection.isEmpty() ? HINTS_SELECTED : HINTS_IDLE;
+        if (s != null) {
+            base = switch (s.gizmo.hint()) {
+                case HOVER_AXIS -> HINTS_HOVER_AXIS;
+                case HOVER_RING -> HINTS_HOVER_RING;
+                case DRAG_MOVE -> HINTS_DRAG_MOVE;
+                case DRAG_RING -> HINTS_DRAG_RING;
+                case TYPED -> HINTS_TYPED;
+                case BOX -> HINTS_BOX;
+                default -> base;
+            };
+            if (s.localView) {                                       // the "Local view" chip comes first
+                List<Hint> withChip = new ArrayList<>();
+                withChip.add(Hint.of("Local view: leave", "/"));
+                withChip.addAll(base);
+                return withChip;
+            }
+        }
+        return base;
     }
 
     /** "Nothing selected" / "tunnel_segment · 8×6×7 at 12, 64, -3 · array ×6" / "3 objects · 40×16×22". */
