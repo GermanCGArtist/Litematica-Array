@@ -81,6 +81,12 @@ public final class Reconciler {
         core.setListener(l);
     }
 
+    /** Local view: only these owners stay placed (null = all). Runtime only; see {@link ReconcileCore#setLocalView}. */
+    public static void setLocalView(java.util.Set<java.util.UUID> owners) {
+        init();
+        core.setLocalView(owners);
+    }
+
     /** Whether the reconciler runs (a world is entered and nothing failed). */
     public static boolean active() {
         return ready && !failed;

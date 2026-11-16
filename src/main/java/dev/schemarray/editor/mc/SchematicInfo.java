@@ -28,7 +28,8 @@ public final class SchematicInfo implements SizeSource {
         private final LitematicaAdapter.Handle handle;
         private final Vec3i size;
         private final List<Region> regions;
-        private long blocks = -1;
+        private volatile long blocks = -1;
+        private final java.util.concurrent.atomic.AtomicBoolean counting = new java.util.concurrent.atomic.AtomicBoolean();
 
         private Info(LitematicaAdapter.Handle handle, Vec3i size, List<Region> regions) {
             this.handle = handle;
@@ -45,16 +46,35 @@ public final class SchematicInfo implements SizeSource {
             return regions;
         }
 
-        /** Non-air blocks in all sub-regions. Counted on the first call (a pass over every block), then kept. */
+        /**
+         * Non-air blocks in all sub-regions, or -1 while they are still being counted. The first call starts the count
+         * (a pass over every block) on a worker thread, so the render thread never walks the blocks; ask again next
+         * frame. The schematic was loaded privately for this info and is only read.
+         */
         public long blockCount() {
-            if (blocks < 0) blocks = count(handle.schematic);
-            return blocks;
+            long b = blocks;
+            if (b < 0 && counting.compareAndSet(false, true)) {
+                POOL.execute(() -> {
+                    try {
+                        blocks = count(handle.schematic);
+                    } catch (RuntimeException | LinkageError e) {
+                        blocks = 0;
+                    }
+                });
+            }
+            return b;
         }
     }
 
     private record Entry(long mtime, Info info, long checkedAtMillis) {}
 
     private static final long RECHECK_MILLIS = 1000;
+    /** One worker for the block counts (daemon, so it never keeps the game from exiting). */
+    private static final java.util.concurrent.ExecutorService POOL = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "schemarray-blockcount");
+        t.setDaemon(true);
+        return t;
+    });
     private static final SchematicInfo SHARED = new SchematicInfo(LitematicaAdapter.shared());
 
     public static SchematicInfo shared() {

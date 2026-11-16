@@ -61,12 +61,94 @@ public final class WorldOverlay {
         if (s == null || mc.levelRenderer == null || mc.player == null) return;
         List<Line> lines = new ArrayList<>();
         collect(s, lines);
-        if (lines.isEmpty()) return;
+        Gizmo.Preview preview = s.gizmo.preview();
+        if (lines.isEmpty() && preview == null) return;
         try (var ignored = mc.levelRenderer.collectPerFrameGizmos()) {
             for (Line l : lines) {
                 var p = Gizmos.cuboid(l.box(), GizmoStyle.stroke(argb(l.rgb(), l.alpha()), l.width()));
                 if (l.xray()) p.setAlwaysOnTop();
             }
+            if (preview != null) renderPreview(preview);
+        }
+    }
+
+    // ------------------------------------------------------------------ the drag ghost (DESIGN 11.3) and the snap face (11.10)
+
+    private static final double DASH_ON = 0.5, DASH_OFF = 0.35;
+    private static final int MAX_DASHES_PER_EDGE = 48;
+
+    private static Vec3 lerp(Vec3 a, Vec3 b, double t) {
+        return new Vec3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+    }
+
+    private static void dashed(Vec3 a, Vec3 b, int color, float width) {
+        double len = Math.sqrt((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y) + (b.z - a.z) * (b.z - a.z));
+        if (len < 1e-6) return;
+        double on = DASH_ON, off = DASH_OFF, period = on + off;
+        if (len / period > MAX_DASHES_PER_EDGE) {                       // long edges: longer dashes, not thousands of lines
+            double k = len / period / MAX_DASHES_PER_EDGE;
+            on *= k;
+            period *= k;
+        }
+        for (double t = 0; t < len; t += period) {
+            Gizmos.line(lerp(a, b, t / len), lerp(a, b, Math.min(len, t + on) / len), color, width).setAlwaysOnTop();
+        }
+    }
+
+    /** A dashed, depth-off box with faint filled faces. */
+    private static void ghostBox(Box b, int rgb, float strokeAlpha, float width, float fillAlpha) {
+        AABB a = aabb(b);
+        double[] lo = {a.minX, a.minY, a.minZ}, hi = {a.maxX, a.maxY, a.maxZ};
+        int stroke = argb(rgb, strokeAlpha);
+        for (int axis = 0; axis < 3; axis++) {
+            int u = (axis + 1) % 3, v = (axis + 2) % 3;
+            for (int i = 0; i < 2; i++) {
+                for (int j = 0; j < 2; j++) {
+                    double[] p = new double[3], q = new double[3];
+                    p[u] = q[u] = i == 0 ? lo[u] : hi[u];
+                    p[v] = q[v] = j == 0 ? lo[v] : hi[v];
+                    p[axis] = lo[axis];
+                    q[axis] = hi[axis];
+                    dashed(new Vec3(p[0], p[1], p[2]), new Vec3(q[0], q[1], q[2]), stroke, width);
+                }
+            }
+        }
+        if (fillAlpha > 0) {
+            int fill = argb(rgb, fillAlpha);
+            for (int axis = 0; axis < 3; axis++) {
+                int u = (axis + 1) % 3, v = (axis + 2) % 3;
+                for (int side = 0; side < 2; side++) {
+                    double[][] c = new double[4][3];
+                    for (int k = 0; k < 4; k++) {
+                        c[k][axis] = side == 0 ? lo[axis] : hi[axis];
+                        c[k][u] = (k == 0 || k == 3) ? lo[u] : hi[u];
+                        c[k][v] = (k < 2) ? lo[v] : hi[v];
+                    }
+                    Gizmos.rect(new Vec3(c[0][0], c[0][1], c[0][2]), new Vec3(c[1][0], c[1][1], c[1][2]), new Vec3(c[2][0], c[2][1], c[2][2]),
+                            new Vec3(c[3][0], c[3][1], c[3][2]), GizmoStyle.fill(fill)).setAlwaysOnTop();
+                }
+            }
+        }
+    }
+
+    private static void renderPreview(Gizmo.Preview p) {
+        for (Box b : p.after()) ghostBox(b, Theme.ACCENT, 1f, 2f, 0.06f);
+        if (p.from() != null && p.to() != null) {
+            Gizmos.line(new Vec3(p.from()[0], p.from()[1], p.from()[2]), new Vec3(p.to()[0], p.to()[1], p.to()[2]), argb(Theme.ACCENT, 0.5f), 1f)
+                    .setAlwaysOnTop();
+        }
+        var f = p.face();
+        if (f != null) {
+            double[][] c = new double[4][3];
+            int[] o = f.axis() == 0 ? new int[] {1, 2} : f.axis() == 1 ? new int[] {0, 2} : new int[] {0, 1};
+            double[] s1 = {f.lo1(), f.hi1(), f.hi1(), f.lo1()}, s2 = {f.lo2(), f.lo2(), f.hi2(), f.hi2()};
+            for (int k = 0; k < 4; k++) {
+                c[k][f.axis()] = f.coord();
+                c[k][o[0]] = s1[k];
+                c[k][o[1]] = s2[k];
+            }
+            Gizmos.rect(new Vec3(c[0][0], c[0][1], c[0][2]), new Vec3(c[1][0], c[1][1], c[1][2]), new Vec3(c[2][0], c[2][1], c[2][2]),
+                    new Vec3(c[3][0], c[3][1], c[3][2]), GizmoStyle.strokeAndFill(argb(Theme.ACCENT, 1f), 2f, argb(Theme.ACCENT, 0.15f))).setAlwaysOnTop();
         }
     }
 
@@ -82,19 +164,24 @@ public final class WorldOverlay {
                 out.add(new Line(aabb(o.union()), linked ? Theme_LINK : Theme.FG, linked ? 0.6f : 0.45f, 1.5f, false));
             }
         }
+        for (UUID id : s.gizmo.boxHits()) {                  // box select: what the rectangle will select
+            WorldBoxes.Owned o = wb.ownerBoxes(id);
+            if (o != null && !s.selection.isSelected(id)) out.add(new Line(aabb(o.union()), Theme.FG, 0.45f, 1.5f, false));
+        }
+        boolean ghost = s.gizmo.preview() != null;           // a drag runs: the original stays as a faint solid outline
         for (UUID id : s.selection.ids()) {
             Node n = scene.byId(id);
             if (n == null) continue;
             boolean isActive = id.equals(active);
             boolean locked = TreeModel.lockedPart(n);
             int rgb = locked ? Theme.GUTTER : Theme.ACCENT;
-            float alpha = isActive || locked ? 1f : 0.75f;
-            float width = isActive ? 2f : 1.5f;
+            float alpha = ghost ? 0.35f : isActive || locked ? 1f : 0.75f;
+            float width = ghost ? 1.5f : isActive ? 2f : 1.5f;
             if (n instanceof ObjectNode o) {
                 List<Box> boxes = wb.objectBoxes(o.id());
                 if (boxes.isEmpty()) continue;                                    // missing or hidden: nothing to draw
                 out.add(new Line(aabb(boxes.get(0)), rgb, alpha, width, false));
-                if (!locked) out.add(new Line(aabb(boxes.get(0)), rgb, isActive ? 0.30f : 0.20f, 1f, true));
+                if (!locked && !ghost) out.add(new Line(aabb(boxes.get(0)), rgb, isActive ? 0.30f : 0.20f, 1f, true));
                 for (int i = 1; i < boxes.size(); i++) out.add(new Line(aabb(boxes.get(i)), rgb, 0.5f, 1f, false));
                 Node owner = scene.ownerOf(o);
                 if (owner != o && wb.ownerBoxes(owner.id()) != null) out.add(new Line(aabb(wb.ownerBoxes(owner.id()).union()), rgb, 0.35f, 1f, false));
@@ -102,7 +189,7 @@ public final class WorldOverlay {
                 WorldBoxes.Owned ow = wb.ownerBoxes(id);
                 if (ow == null) continue;
                 out.add(new Line(aabb(ow.union()), rgb, alpha, width, false));
-                if (!locked) out.add(new Line(aabb(ow.union()), rgb, isActive ? 0.30f : 0.20f, 1f, true));
+                if (!locked && !ghost) out.add(new Line(aabb(ow.union()), rgb, isActive ? 0.30f : 0.20f, 1f, true));
             } else {
                 Box u = wb.unionOf(scene, List.of(id));                              // folder, project, Loose: what they hold
                 if (u != null) out.add(new Line(aabb(u), rgb, 0.35f, 1f, false));

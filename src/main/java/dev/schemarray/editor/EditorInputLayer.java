@@ -9,6 +9,7 @@ import dev.schemarray.editor.view.EditorChrome;
 import dev.schemarray.editor.view.PropertiesWindow;
 import dev.schemarray.editor.view.SceneWindow;
 import dev.schemarray.editor.view.Toasts;
+import dev.schemarray.editor.view.TransformHud;
 import dev.schemarray.editor.world.WorldOverlay;
 import imgui.ImGui;
 import imgui.flag.ImGuiDockNodeFlags;
@@ -74,6 +75,8 @@ public final class EditorInputLayer implements UiLayer {
         }
         s.resetLayout = false;
         EditorChrome.draw(s);
+        s.gizmo.frame(mc);
+        TransformHud.draw(s);
 
         // viewport right click: a short RMB press opens the menu for what is under the pointer
         EditorCamera cam = EditorCamera.get();
@@ -87,7 +90,7 @@ public final class EditorInputLayer implements UiLayer {
         }
         ContextMenus.draw(s);
 
-        if ((++frame & 1) == 0) Picking.updateHover(mc, UiHost.imguiWantsMouse());
+        if ((++frame & 1) == 0) Picking.updateHover(mc, UiHost.imguiWantsMouse() || s.gizmo.owningMouse());
         WorldOverlay.drawTags();
         Toasts.draw(s);
         s.popupOpen = ImGui.isPopupOpen("", imgui.flag.ImGuiPopupFlags.AnyPopupId | imgui.flag.ImGuiPopupFlags.AnyPopupLevel);
@@ -106,7 +109,8 @@ public final class EditorInputLayer implements UiLayer {
     @Override
     public void onKey(int key, int scancode, int action, int mods) {
         Minecraft mc = Minecraft.getInstance();
-        if (mc.screen != null || mc.player == null || action != GLFW.GLFW_PRESS) return;
+        if (mc.screen != null || mc.player == null) return;
+        if (action != GLFW.GLFW_PRESS && !(action == GLFW.GLFW_REPEAT && key == GLFW.GLFW_KEY_BACKSPACE)) return;   // Backspace repeats in a typed transform
         if (UiHost.imguiWantsTextInput()) return;                         // typing in a field: no shortcut fires
         if (EditorCamera.get().isFlying()) return;                        // fly keys only
         if (EditorMode.passesToVanilla(mc, key, scancode, mods)) return;  // F-keys, chat, the toggle
@@ -121,6 +125,7 @@ public final class EditorInputLayer implements UiLayer {
             return;
         }
         if (s.popupOpen) return;                                          // menus own arrows, Enter and Esc
+        if (action == GLFW.GLFW_REPEAT && !s.gizmo.typedActive()) return;
         s.onKey(key, mods);
     }
 
@@ -137,12 +142,26 @@ public final class EditorInputLayer implements UiLayer {
         Minecraft mc = Minecraft.getInstance();
         if (mc.screen != null && action == GLFW.GLFW_PRESS) return;
         boolean overUi = UiHost.imguiWantsMouse();
+        EditorSession s = null;
+        try {
+            s = EditorSession.get();
+        } catch (Throwable ignored) {
+            // no session: plain navigation only
+        }
         if (button == GLFW.GLFW_MOUSE_BUTTON_LEFT) {
             if (action == GLFW.GLFW_PRESS) {
-                if (!overUi && !EditorCamera.get().isNavigating()) Picking.onLeftPress(mc);
+                if (!overUi && !EditorCamera.get().isNavigating()) {
+                    if (s == null || !s.gizmo.onLeftPress(mc)) {           // the gizmo, the ring and box select come first
+                        Picking.onLeftPress(mc);
+                        if (s != null) s.gizmo.onEmptyPress(mc);
+                    }
+                }
             } else if (action == GLFW.GLFW_RELEASE) {
-                Picking.onLeftRelease(mc, mods);
+                if (s != null && s.gizmo.onLeftRelease(mc, mods)) Picking.cancelPress();
+                else Picking.onLeftRelease(mc, mods);
             }
+        } else if (button == GLFW.GLFW_MOUSE_BUTTON_RIGHT && action == GLFW.GLFW_PRESS && s != null && s.gizmo.onRightPress()) {
+            return;                                                         // a right click cancels the gesture and never starts a fly
         }
         EditorCamera.get().onMouseButton(mc, button, action, overUi);
     }

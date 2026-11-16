@@ -110,6 +110,11 @@ public final class Picking {
         leftDown = true;
     }
 
+    /** Forgets a press that another tool took over (a box select that grew out of it). */
+    public static void cancelPress() {
+        leftDown = false;
+    }
+
     /** The left button went up: a click (little movement) selects. {@code mods}: GLFW modifier bits. */
     public static void onLeftRelease(Minecraft mc, int mods) {
         if (!leftDown) return;

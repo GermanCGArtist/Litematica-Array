@@ -129,11 +129,11 @@ public final class MenuModel {
         m.add(sep());
         m.add(item("select.all", "Select all", "A", ""));
         m.add(item("select.none", "Select none", "Alt A", "", !c.selection().isEmpty(), "Nothing is selected"));
-        m.add(later("box", "Box select", "B", "box"));
+        m.add(item("box", "Box select", "B", "box"));
         m.add(sep());
         m.add(item("frame.all", "Frame all", "F", "frame"));
         m.add(item("show.hidden", "Show hidden", "Alt H", "eye", c.hasHidden(), "Nothing is hidden"));
-        if (c.localView()) m.add(later("local.leave", "Leave local view", "/", "local"));
+        if (c.localView()) m.add(item("local.leave", "Leave local view", "/", "local"));
         m.add(sep());
         m.add(item("undo", c.undoLabel() == null ? "Undo" : "Undo " + c.undoLabel(), "Ctrl Z", "undo", c.undoLabel() != null, "Nothing to undo"));
         m.add(item("redo", c.redoLabel() == null ? "Redo" : "Redo " + c.redoLabel(), "Ctrl Shift Z", "redo", c.redoLabel() != null, "Nothing to redo"));
@@ -177,7 +177,7 @@ public final class MenuModel {
 
     private static List<Item> transform(boolean single) {
         return List.of(
-                later("t.move", "Move", "G", "move"),
+                item("t.move", "Move", "G", "move"),
                 item("t.rot.cw", "Rotate +90°", "", "rotate"),
                 item("t.rot.ccw", "Rotate −90°", "", "rotate"),
                 item("t.mirror", "Mirror X", "M", "mirror"),
@@ -251,7 +251,7 @@ public final class MenuModel {
         m.add(moveTo(c.scene(), sel));
         m.add(sep());
         m.add(item("hide", allHidden(sel) ? "Show" : "Hide", "H", allHidden(sel) ? "eye" : "eyeoff"));
-        m.add(later("local", "Local view", "/", "local"));
+        m.add(item("local", "Local view", "/", "local"));
         m.add(item("frame", "Frame selected", "F", "frame"));
         if (!area) {
             m.add(sep());
@@ -291,7 +291,7 @@ public final class MenuModel {
         m.add(sub("Assembly", "assembly", asm));
         m.add(sep());
         m.add(item("hide", a.hidden() ? "Show" : "Hide", "H", a.hidden() ? "eye" : "eyeoff"));
-        m.add(later("local", "Local view", "/", "local"));
+        m.add(item("local", "Local view", "/", "local"));
         m.add(item("frame", "Frame selected", "F", "frame"));
         m.add(sep());
         m.add(sub("Export", "export", List.of(later("export.zip", "Assembly (.zip)…", "", "export"), later("export.bake", "Bake to one .litematic…", "", "export"))));

@@ -79,6 +79,20 @@ public final class EditorActions {
         void toggleWindows();
 
         void showInTree(UUID id);
+
+        /** The pivot block of a selection under the current pivot mode, or null to use the selection's middle block. */
+        default Vec3i pivot(List<UUID> ids) {
+            return null;
+        }
+
+        /** G: starts a typed move of the selection. */
+        default void startMove() {}
+
+        /** B: arms box select. */
+        default void startBoxSelect() {}
+
+        /** Toggles local view. */
+        default void toggleLocalView() {}
     }
 
     private final Supplier<UndoStack> stack;
@@ -118,6 +132,7 @@ public final class EditorActions {
                  "show.hidden", "undo", "redo", "duplicate", "dup.linked", "rename", "t.rot.cw", "t.rot.ccw", "t.mirror",
                  "t.mirrorz", "mod.array", "mod.boolean", "mod.realise", "front.front", "front.forward", "front.backward",
                  "front.back", "assembly.create", "hide", "delete", "asm.makelocal", "asm.breakup", "part.select.owner",
+                 "t.move", "box", "local", "local.leave",
                  "part.makelocal", "folder.toproject", "loose.toproject", "proj.active", "proj.explorer", "proj.close" -> true;
             default -> false;
         };
@@ -133,6 +148,8 @@ public final class EditorActions {
     // ------------------------------------------------------------------------------------------ commands
 
     private Vec3i pivot() {
+        Vec3i chosen = host.pivot(ids());
+        if (chosen != null) return chosen;
         Box b = host.boxOf(ids());
         if (b == null) return Vec3i.ZERO;
         Vec3i s = b.size();
@@ -237,7 +254,7 @@ private static boolean hasArray(Node n) {        List<dev.schemarray.editor.core
     }
 
     /** Runs a group of commands as one undo step; a refusal rolls the group back and is shown as a toast. */
-    private boolean transaction(String label, List<Command> commands) {
+    public boolean transaction(String label, List<Command> commands) {
         UndoStack s = stack.get();
         s.begin(label);
         for (Command c : commands) {
@@ -294,6 +311,16 @@ private static boolean hasArray(Node n) {        List<dev.schemarray.editor.core
             case "rename":
                 if (sel.active() != null) host.beginRename(sel.active());
                 return sel.active() != null;
+            case "t.move":
+                host.startMove();
+                return true;
+            case "box":
+                host.startBoxSelect();
+                return true;
+            case "local":
+            case "local.leave":
+                host.toggleLocalView();
+                return true;
             case "add.schematic":
                 host.requestAddSchematic(addParent().id());
                 return true;
