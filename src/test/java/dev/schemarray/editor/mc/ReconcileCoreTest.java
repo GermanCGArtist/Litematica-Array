@@ -635,4 +635,132 @@ class ReconcileCoreTest {
         run();
         assertEquals(2, port.placements.size());
     }
+
+    // ------------------------------------------------------------------------------------------ arrays on assemblies (M3)
+
+    private AssemblyNode arrayedAssembly(int count) {
+        AssemblyNode asm = new AssemblyNode("asm");
+        ObjectNode p1 = obj("p1"), p2 = obj("p2");
+        p2.setTransform(at(10, 0, 0));
+        asm.addChild(p1);
+        asm.addChild(p2);
+        asm.mods().add(array(count, 1.0));
+        proj.addChild(asm);
+        return asm;
+    }
+
+    @Test
+    void anAssemblyArrayRepeatsEveryPartForEachCellWithTheUnionOfThePartsAsSize() {
+        AssemblyNode asm = arrayedAssembly(3);
+        run();
+        // parts span x 0..14 (p2 at 10, 4 wide), so the step is 14
+        assertEquals(Set.of(new Vec3i(0, 0, 0), new Vec3i(10, 0, 0), new Vec3i(14, 0, 0), new Vec3i(24, 0, 0), new Vec3i(28, 0, 0), new Vec3i(38, 0, 0)), origins());
+        assertEquals(6, port.placements.size());
+        int before = port.created;
+        run();
+        assertEquals(before, port.created, "a second pass creates nothing");
+
+        ((ArrayModifier) asm.mods().get(0)).count = 2;
+        run();
+        assertEquals(4, port.placements.size(), "the cells that are gone lose their placements");
+        assertEquals(Set.of(new Vec3i(0, 0, 0), new Vec3i(10, 0, 0), new Vec3i(14, 0, 0), new Vec3i(24, 0, 0)), origins());
+    }
+
+    @Test
+    void theBaseCellsKeepTheirSavedPlacementIdsAndTheCellsAreNotSaved() {
+        AssemblyNode asm = arrayedAssembly(2);
+        run();
+        ObjectNode p1 = (ObjectNode) asm.children().get(0);
+        assertEquals(Set.of(ObjectNode.BASE_CELL), p1.placementIds().keySet(), "the copies of an assembly cell are runtime only");
+    }
+
+    @Test
+    void anArrayOfAnAssemblyFollowsItsTransform() {
+        AssemblyNode asm = arrayedAssembly(2);
+        asm.setTransform(new Transform(new Vec3i(100, 0, 0), Rot.CW_90, Mirror.NONE));
+        run();
+        // CW_90: (x,y,z) -> (-z,y,x); the cell offset (14,0,0) becomes (0,0,14)
+        assertTrue(origins().contains(new Vec3i(100, 0, 0)));
+        assertTrue(origins().contains(new Vec3i(100, 0, 14)));
+        assertTrue(origins().contains(new Vec3i(100, 0, 10)));
+        assertTrue(origins().contains(new Vec3i(100, 0, 24)));
+        for (PlacementState s : port.placements.values()) assertEquals(Rot.CW_90, s.rot());
+    }
+
+    @Test
+    void arraysNestInsideAnAssemblyArray() {
+        AssemblyNode asm = new AssemblyNode("asm");
+        ObjectNode part = obj("part");
+        part.mods().add(array(2, 1.0));   // 4 and 8 wide with its own copy
+        asm.addChild(part);
+        asm.mods().add(array(2, 1.0));
+        proj.addChild(asm);
+        run();
+        assertEquals(Set.of(new Vec3i(0, 0, 0), new Vec3i(4, 0, 0), new Vec3i(8, 0, 0), new Vec3i(12, 0, 0)), origins());
+    }
+
+    @Test
+    void aHiddenAssemblyHasNoCellPlacementsAndTheyComeBack() {
+        AssemblyNode asm = arrayedAssembly(2);
+        run();
+        assertEquals(4, port.placements.size());
+        asm.setHidden(true);
+        run();
+        assertEquals(0, port.placements.size());
+        asm.setHidden(false);
+        run();
+        assertEquals(4, port.placements.size());
+    }
+
+    @Test
+    void aLinkedAssemblyWithAnArrayRepeatsItsParts() throws IOException {
+        writeLasm(2);
+        AssemblyNode a = link("t1", at(0, 0, 0));
+        a.mods().add(array(2, 1.0));
+        AssemblyNode b = link("t2", new Transform(new Vec3i(50, 0, 0), Rot.CW_180, Mirror.NONE));
+        b.mods().add(array(2, 1.0));
+        run();
+        // t1: the part sits at x=2 (4 wide), the step is 4. t2 is turned: the cell offset (4,0,0) becomes (-4,0,0).
+        assertEquals(Set.of(new Vec3i(2, 0, 0), new Vec3i(6, 0, 0), new Vec3i(48, 0, 0), new Vec3i(44, 0, 0)), origins());
+        assertTrue(a.children().isEmpty());
+    }
+
+    @Test
+    void aLinkedAssemblyWithAnArrayFollowsTheFileWhenItChanges() throws IOException {
+        Path f = writeLasm(2);
+        AssemblyNode a = link("t1", at(0, 0, 0));
+        a.mods().add(array(2, 1.0));
+        run();
+        assertEquals(Set.of(new Vec3i(2, 0, 0), new Vec3i(6, 0, 0)), origins());
+        writeLasm(3);
+        Files.setLastModifiedTime(f, FileTime.fromMillis(System.currentTimeMillis() + 5000));
+        run();
+        assertEquals(Set.of(new Vec3i(3, 0, 0), new Vec3i(7, 0, 0)), origins());
+    }
+
+    @Test
+    void localViewFiltersTheCellsOfAnAssemblyToo() {
+        AssemblyNode asm = arrayedAssembly(2);
+        ObjectNode other = obj("other");
+        other.setTransform(at(0, 0, 50));
+        proj.addChild(other);
+        run();
+        assertEquals(5, port.placements.size());
+        core.setLocalView(Set.of(other.id()));
+        run();
+        assertEquals(1, port.placements.size(), "the assembly and its copies are hidden together");
+        core.setLocalView(Set.of(asm.id()));
+        run();
+        assertEquals(4, port.placements.size());
+    }
+
+    @Test
+    void aLinkedPartWithAnAbsentSizeIsLeftOut() throws IOException {
+        core = new ReconcileCore(port, f -> f.getFileName().toString().equals("part.litematic") ? null : size, new LasmCache(), dir);
+        writeLasm(2);
+        AssemblyNode a = link("t1", at(0, 0, 0));
+        a.mods().add(array(2, 1.0));
+        run();
+        assertEquals(0, port.placements.size(), "nothing has a size: no cells, and no crash");
+    }
 }

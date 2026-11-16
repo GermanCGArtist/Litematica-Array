@@ -190,6 +190,7 @@ public final class WorldOverlay {
                 if (ow == null) continue;
                 out.add(new Line(aabb(ow.union()), rgb, alpha, width, false));
                 if (!locked && !ghost) out.add(new Line(aabb(ow.union()), rgb, isActive ? 0.30f : 0.20f, 1f, true));
+                for (Box cell : wb.cellBoxes(id)) out.add(new Line(aabb(cell), rgb, 0.5f, 1f, false));     // the copies of an assembly array
             } else {
                 Box u = wb.unionOf(scene, List.of(id));                              // folder, project, Loose: what they hold
                 if (u != null) out.add(new Line(aabb(u), rgb, 0.35f, 1f, false));

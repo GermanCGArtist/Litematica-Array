@@ -87,6 +87,12 @@ public final class Reconciler {
         core.setLocalView(owners);
     }
 
+    /** Reload: the next pass reads every linked {@code .lasm} again. */
+    public static void reloadLinks() {
+        init();
+        core.reloadLinks();
+    }
+
     /** Whether the reconciler runs (a world is entered and nothing failed). */
     public static boolean active() {
         return ready && !failed;

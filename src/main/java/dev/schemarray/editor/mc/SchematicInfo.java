@@ -118,7 +118,7 @@ public final class SchematicInfo implements SizeSource {
         cache.clear();
     }
 
-    private static List<Region> regionsOf(LitematicaSchematic s) {
+    static List<Region> regionsOf(LitematicaSchematic s) {
         List<Region> out = new ArrayList<>();
         Map<String, BlockPos> sizes = s.getAreaSizes();
         for (var a : s.getAreaPositions().entrySet()) {

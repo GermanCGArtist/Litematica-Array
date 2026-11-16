@@ -2,6 +2,7 @@ package dev.schemarray.editor.mc;
 
 import dev.schemarray.editor.core.ArrayCells;
 import dev.schemarray.editor.core.ArrayModifier;
+import dev.schemarray.editor.core.AssemblyBounds;
 import dev.schemarray.editor.core.AssemblyNode;
 import dev.schemarray.editor.core.Ids;
 import dev.schemarray.editor.core.Modifier;
@@ -44,7 +45,9 @@ import java.util.UUID;
  * wins and the placement follows. The first time a placement is met (after a join) the model wins for project
  * objects, and the placement wins for Loose objects (Litematica is their source of truth).
  *
- * <p>Linked assemblies: the parts come from the {@code .lasm} (cached by modification time); the placements of a part
+ * <p>Arrays on assemblies (local or linked) repeat every part for each cell (size = the union of the parts' boxes, see
+ * {@link AssemblyBounds}); the placements of those cells live in the same runtime map as linked parts, keyed
+ * {@code instanceId:cell:partId}, and are not saved. Linked assemblies: the parts come from the {@code .lasm} (cached by modification time); the placements of a part
  * are kept in a runtime map under {@code Ids.derived(instanceId + ":" + partId)} and never saved. Linked parts are
  * read only, so a move outside the editor is put back instead of adopted.
  */
@@ -99,6 +102,11 @@ public final class ReconcileCore {
 
     public void setBudget(int budget) {
         this.budget = Math.max(1, budget);
+    }
+
+    /** Forgets the parts read from {@code .lasm} files, so every linked assembly reads its file again (Reload). */
+    public void reloadLinks() {
+        lasms.clear();
     }
 
     /** Forgets everything remembered between calls (a new world). Placements are left alone. */
@@ -185,43 +193,111 @@ public final class ReconcileCore {
     private void visit(Node n, boolean off, ProjectNode proj, Run r) {
         boolean o = off || n.hidden();
         if (n instanceof ProjectNode p) proj = p;
-        if (!o && localOnly != null && proj != null && (n instanceof ObjectNode || n instanceof AssemblyNode a0 && a0.isLinked())
+        if (!o && localOnly != null && proj != null && (n instanceof ObjectNode || n instanceof AssemblyNode)
                 && !localOnly.contains(r.scene.ownerOf(n).id())) o = true;
         if (n instanceof ObjectNode ob) {
-            object(new Slot(ob.placementIds()), ob, o, r.scene.worldTransform(ob), proj, r, false);
-        } else if (n instanceof AssemblyNode a && a.isLinked()) {
-            Transform aw = r.scene.worldTransform(a);
-            List<Node> parts = linkedParts(proj, (AssemblyNode.Link) a.source());
-            if (parts != null) for (Node p : parts) visitLinked(p, o, aw, a.id(), proj, r);
+            object(new Slot(ob.placementIds()), ob, o, r.scene.worldTransform(ob), proj, r, false, null);
+        } else if (n instanceof AssemblyNode a) {
+            assembly(a, o, proj, r);
         } else {
             for (Node c : new ArrayList<>(n.children())) visit(c, o, proj, r);
         }
     }
 
-    private void visitLinked(Node node, boolean off, Transform parentWorld, UUID instanceId, ProjectNode proj, Run r) {
-        boolean o = off || node.hidden();
-        Transform w = parentWorld.then(node.localTransform());
-        UUID key = Ids.derived(instanceId + ":" + node.id());
-        if (node instanceof ObjectNode ob) {
-            Slot s = new Slot(linkedIds.computeIfAbsent(key, k -> new LinkedHashMap<>()));
-            object(s, ob, o, w, proj, r, true);
-        } else if (node instanceof AssemblyNode a && a.isLinked()) {
-            List<Node> parts = linkedParts(proj, (AssemblyNode.Link) a.source());
-            if (parts != null) for (Node p : parts) visitLinked(p, o, w, key, proj, r);
+    /**
+     * An assembly in the model, local or linked. Its base cell is the assembly itself: a local assembly's parts are
+     * model nodes with their own placement ids; a linked one's parts come from the {@code .lasm}. Every array cell
+     * repeats all parts at the cell's transform; those placements are runtime-only (see the class comment).
+     */
+    private void assembly(AssemblyNode a, boolean off, ProjectNode proj, Run r) {
+        Transform aw = r.scene.worldTransform(a);
+        Path base = projectBase(proj);
+        AssemblyBounds.Env env = new CoreEnv(r.scene);
+        AssemblyBounds.Linked parts = AssemblyBounds.partsOf(a, base, env);
+        Map<String, Vec3i> cells = Map.of();
+        if (!off && parts != null && AssemblyBounds.hasEnabledArray(a)) cells = AssemblyBounds.frame(a, base, env).cells();
+        if (a.isLinked()) {
+            if (parts != null) for (Node p : parts.parts()) visitRuntime(p, off, aw, a.id(), "", parts.base(), proj, r, 0, env);
         } else {
-            for (Node c : node.children()) visitLinked(c, o, w, instanceId, proj, r);
+            for (Node c : new ArrayList<>(a.children())) visit(c, off, proj, r);
+        }
+        if (parts == null) return;
+        for (var cell : cells.entrySet()) {
+            Transform cw = new Transform(aw.apply(cell.getValue()), aw.rot(), aw.mirror());
+            for (Node p : new ArrayList<>(parts.parts())) visitRuntime(p, off, cw, a.id(), cell.getKey(), parts.base(), proj, r, 0, env);
         }
     }
 
-    private List<Node> linkedParts(ProjectNode proj, AssemblyNode.Link link) {
-        if (proj == null) return null;
-        Path file = resolve(proj, link.path());
-        return file == null ? null : lasms.parts(file);
+    /**
+     * A part whose placements are not stored in the model (a part of a linked assembly, or of an array cell). Its
+     * placement ids live in {@link #linkedIds} under {@code Ids.derived(instanceId + ":" + cell + ":" + partId)}
+     * (without the cell part for the base cell, as before).
+     */
+    private void visitRuntime(Node node, boolean off, Transform parentWorld, UUID instanceId, String cell, Path base, ProjectNode proj, Run r,
+                              int depth, AssemblyBounds.Env env) {
+        boolean o = off || node.hidden();
+        Transform w = parentWorld.then(node.localTransform());
+        UUID key = Ids.derived(cell.isEmpty() ? instanceId + ":" + node.id() : instanceId + ":" + cell + ":" + node.id());
+        if (node instanceof ObjectNode ob) {
+            Slot s = new Slot(linkedIds.computeIfAbsent(key, k -> new LinkedHashMap<>()));
+            object(s, ob, o, w, proj, r, true, base);
+        } else if (node instanceof AssemblyNode a) {
+            if (depth >= AssemblyBounds.MAX_DEPTH) return;
+            AssemblyBounds.Linked parts = AssemblyBounds.partsOf(a, base, env);
+            if (parts == null) return;
+            Map<String, Vec3i> cells = o || !AssemblyBounds.hasEnabledArray(a) ? Map.of() : AssemblyBounds.frame(a, base, env).cells();
+            for (Node p : parts.parts()) visitRuntime(p, o, w, key, "", parts.base(), proj, r, depth + 1, env);
+            for (var c : cells.entrySet()) {
+                Transform cw = new Transform(w.apply(c.getValue()), w.rot(), w.mirror());
+                for (Node p : parts.parts()) visitRuntime(p, o, cw, key, c.getKey(), parts.base(), proj, r, depth + 1, env);
+            }
+        } else {
+            for (Node c : node.children()) visitRuntime(c, o, w, instanceId, cell, base, proj, r, depth, env);
+        }
+    }
+
+    /** What files are relative to for the nodes of a project (null for Loose: its own rule in {@link #resolve}). */
+    private Path projectBase(ProjectNode proj) {
+        if (proj == null || proj.path().isEmpty()) return null;
+        return (looseBase != null ? looseBase.resolve(proj.path()) : Path.of(proj.path())).toAbsolutePath().normalize();
+    }
+
+    /** Sizes and linked parts for {@link AssemblyBounds}, with the rules of this reconciler. */
+    private final class CoreEnv implements AssemblyBounds.Env {
+        private final Scene scene;
+
+        CoreEnv(Scene scene) {
+            this.scene = scene;
+        }
+
+        @Override
+        public Vec3i size(ObjectNode o, Path base) {
+            Path f = base != null ? inside(base, o.file()) : resolve(scene.projectOf(o), o.file());
+            return f == null ? null : sizes.size(f);
+        }
+
+        @Override
+        public AssemblyBounds.Linked linked(AssemblyNode a, Path base) {
+            Path from = base != null ? base : projectBase(scene.projectOf(a));
+            if (from == null) return null;
+            Path target = LinkPaths.target(from, ((AssemblyNode.Link) a.source()).path());
+            List<Node> parts = lasms.parts(target);
+            return parts == null ? null : new AssemblyBounds.Linked(parts, LinkPaths.baseOf(from, target));
+        }
+    }
+
+    private static Path inside(Path base, String file) {
+        if (file == null || file.isEmpty()) return null;
+        try {
+            return ProjectLayout.resolveInside(base, file);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------------------------------ one object
 
-    private void object(Slot s, ObjectNode ob, boolean off, Transform world, ProjectNode proj, Run r, boolean linked) {
+    private void object(Slot s, ObjectNode ob, boolean off, Transform world, ProjectNode proj, Run r, boolean linked, Path base) {
         Map<String, String> ids = s.ids;
         r.modelIds.addAll(ids.values());
         if (off) {
@@ -234,7 +310,7 @@ public final class ReconcileCore {
             }
             return;
         }
-        Path file = resolve(proj, ob.file());
+        Path file = base != null ? inside(base, ob.file()) : resolve(proj, ob.file());
         Vec3i size = file == null ? null : sizes.size(file);
         if (size == null) return;   // unreadable: leave its placements as they are
 

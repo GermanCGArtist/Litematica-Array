@@ -70,6 +70,8 @@ public final class SceneWindow {
     private static UUID deferredSelect;
     private static List<String> projectChoices = List.of();
     private static List<String> schematicChoices = List.of();
+    private static List<Path> lasmChoices = List.of();
+    private static List<ProjectNode> linkChoices = List.of();
     private static UUID addParent;
     private static final ImString PICK_FILTER = new ImString(64);
 
@@ -195,6 +197,19 @@ public final class SceneWindow {
             schematicChoices = listSchematics(s);
             PICK_FILTER.set("");
             ImGui.openPopup("Add schematic##modal");
+        }
+        if (s.addAssemblyParent != null) {
+            addParent = s.addAssemblyParent;
+            s.addAssemblyParent = null;
+            lasmChoices = s.listLasm();
+            PICK_FILTER.set("");
+            ImGui.openPopup("Add assembly##modal");
+        }
+        if (s.linkProjectParent != null) {
+            addParent = s.linkProjectParent;
+            s.linkProjectParent = null;
+            linkChoices = listLinkable(s);
+            ImGui.openPopup("Link project##modal");
         }
         drawModals(s);
     }
@@ -764,6 +779,80 @@ public final class SceneWindow {
             if (ImGui.button("Cancel", 100 * sc, 0) || ImGui.isKeyPressed(ImGuiKey.Escape)) ImGui.closeCurrentPopup();
             ImGui.endPopup();
         }
+        ImGui.setNextWindowSizeConstraints(420 * sc, 0, 700 * sc, 600 * sc);
+        if (ImGui.beginPopupModal("Add assembly##modal", ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoSavedSettings)) {
+            s.popupOpen = true;
+            Ui.label("Assemblies (.lasm) in the active project and the schematics folder");
+            ImGui.setNextItemWidth(-1);
+            ImGui.inputTextWithHint("##lasmfilter", "Filter", PICK_FILTER);
+            String f = PICK_FILTER.get().toLowerCase(Locale.ROOT);
+            ImGui.beginChild("##lasmlist", 400 * sc, 260 * sc, true);
+            int shown = 0;
+            for (Path p : lasmChoices) {
+                String label = s.schematicsDir().relativize(p).toString().replace(java.io.File.separatorChar, '/');
+                if (!f.isEmpty() && !label.toLowerCase(Locale.ROOT).contains(f)) continue;
+                if (++shown > 400) break;
+                if (ImGui.selectable(label + "##l" + label)) {
+                    UUID parent = addParent != null && s.scene().byId(addParent) != null ? addParent : activeOrLoose(s);
+                    s.linkAssembly(parent, p);
+                    ImGui.closeCurrentPopup();
+                }
+            }
+            if (shown == 0) Ui.dim("No .lasm files found. Save an assembly as linked, or export one.");
+            ImGui.endChild();
+            Ui.smallDim("The assembly is linked: it updates when its file is saved. Make it local to edit it.");
+            if (ImGui.button("Cancel", 100 * sc, 0) || ImGui.isKeyPressed(ImGuiKey.Escape)) ImGui.closeCurrentPopup();
+            ImGui.endPopup();
+        }
+        ImGui.setNextWindowSizeConstraints(420 * sc, 0, 700 * sc, 600 * sc);
+        if (ImGui.beginPopupModal("Link project##modal", ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoSavedSettings)) {
+            s.popupOpen = true;
+            Ui.label("Link a project as an assembly");
+            if (linkChoices.isEmpty()) Ui.dim("There is no other project to link.");
+            ImGui.beginChild("##linklist", 400 * sc, Math.min(260 * sc, Math.max(40 * sc, linkChoices.size() * 28 * sc)), true);
+            for (ProjectNode p : linkChoices) {
+                if (ImGui.selectable(p.name() + "##lp" + p.id())) {
+                    UUID parent = addParent != null && s.scene().byId(addParent) != null ? addParent : activeOrLoose(s);
+                    s.linkProject(parent, p);
+                    ImGui.closeCurrentPopup();
+                }
+            }
+            ImGui.endChild();
+            if (ImGui.button("Cancel", 100 * sc, 0) || ImGui.isKeyPressed(ImGuiKey.Escape)) ImGui.closeCurrentPopup();
+            ImGui.endPopup();
+        }
+    }
+
+    private static UUID activeOrLoose(EditorSession s) {
+        return s.scene().activeProject() != null ? s.scene().activeProject().id() : s.scene().loose().id();
+    }
+
+    /** Projects that can be linked into the parent's project: the open ones and the closed ones in schematics/Projects, but not that project itself. */
+    private static List<ProjectNode> listLinkable(EditorSession s) {
+        List<ProjectNode> out = new ArrayList<>();
+        Node parent = addParent == null ? null : s.scene().byId(addParent);
+        ProjectNode own = parent == null ? s.scene().activeProject() : s.scene().projectOf(parent);
+        Set<Path> seen = new java.util.HashSet<>();
+        for (ProjectNode p : s.scene().projects()) {
+            if (p == own) continue;
+            out.add(p);
+            seen.add(s.projectDir(p));
+        }
+        Path root = s.schematicsDir().resolve("Projects");
+        try (Stream<Path> st = Files.list(root)) {
+            st.filter(Files::isDirectory).filter(d -> Files.exists(d.resolve("project.json"))).sorted().forEach(d -> {
+                Path abs = d.toAbsolutePath().normalize();
+                if (seen.contains(abs) || (own != null && s.projectDir(own).equals(abs))) return;
+                try {
+                    out.add(dev.schemarray.editor.io.ProjectIo.read(d.resolve("project.json")));
+                } catch (IOException | RuntimeException ignored) {
+                    // an unreadable project cannot be linked
+                }
+            });
+        } catch (IOException ignored) {
+            // no Projects folder yet
+        }
+        return out;
     }
 
     private static void addSchematic(EditorSession s, String path) {
