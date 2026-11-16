@@ -115,7 +115,7 @@ public final class EditorSession {
     private Tool tool = Tool.SELECT;
 
     public boolean windowsHidden;
-    public boolean showScene = true, showProperties = true;
+    public boolean showScene = true, showProperties = true, showTopView = true;
     /** Snapping toolbar toggle (Ctrl inverts it while dragging). Saved in the UI config. */
     public boolean snap;
     /** Local view is on (see {@link #toggleLocalView()}); runtime only. */
@@ -841,6 +841,29 @@ public final class EditorSession {
         @Override
         public void focusFilter() {
             focusFilter = true;
+        }
+
+        @Override
+        public void syncPush(ProjectNode p) {
+            dev.schemarray.editor.sync.SyncService.get().push(p);
+        }
+
+        @Override
+        public void syncShare(ProjectNode p) {
+            var svc = dev.schemarray.editor.sync.SyncService.get();
+            if (p.sync() == ProjectNode.Sync.SHARED) {
+                svc.stopSharing(p);
+                toast(ToastQueue.Level.INFO, "Stopped tracking \"" + p.name() + "\". Its placements stay on the server; remove them in Syncmatica.s list.", null, null);
+            } else {
+                svc.share(p);
+                toast(ToastQueue.Level.INFO, "\"" + p.name() + "\" is shared. Nothing is uploaded until you press Push.", null, null);
+            }
+        }
+
+        @Override
+        public Vec3i cameraTarget() {
+            var t = dev.schemarray.editor.cam.EditorCamera.get().target();
+            return new Vec3i((int) Math.floor(t.x), (int) Math.floor(t.y), (int) Math.floor(t.z));
         }
 
         @Override

@@ -96,12 +96,21 @@ public final class EditorChrome {
     // ------------------------------------------------------------------ toolbar
 
     /** One toolbar button's content. */
-    private record Btn(String id, String icon, String label, String cap, boolean active, boolean enabled, String tip) {}
+    private record Btn(String id, String icon, String label, String cap, boolean active, boolean enabled, String tip, String pill, int pillRgb, int pillText) {
+        Btn(String id, String icon, String label, String cap, boolean active, boolean enabled, String tip) {
+            this(id, icon, label, cap, active, enabled, tip, null, 0, 0);
+        }
+    }
+
+    private static float pillWidth(String text, float sc) {
+        return Math.max(17 * sc, ImGui.calcTextSizeX(text) * 0.85f + 10 * sc);
+    }
 
     private static float btnWidth(Btn b, boolean labels, boolean caps, float sc) {
         float w = 16 * sc + 15 * sc;
         if (labels && b.label() != null) w += 6 * sc + ImGui.calcTextSizeX(b.label());
         if (caps && b.cap() != null) w += 6 * sc + Ui.capWidth(b.cap());
+        if (b.pill() != null) w += 6 * sc + pillWidth(b.pill(), sc);
         return w;
     }
 
@@ -126,6 +135,14 @@ public final class EditorChrome {
         if (caps && b.cap() != null) {
             cx += 6 * sc;
             Ui.keyCap(dl, cx, y + (h - 18 * sc) * 0.5f, b.cap(), b.enabled() ? Theme.DIM : Theme.GUTTER);
+        }
+        if (b.pill() != null) {
+            cx += 6 * sc;
+            float pw = pillWidth(b.pill(), sc), ph = 17 * sc, py = y + (h - ph) * 0.5f;
+            dl.addRectFilled(cx, py, cx + pw, py + ph, Ui.c(b.pillRgb()), ph * 0.5f);
+            Theme.push(UiHost.theme().small());
+            dl.addText(cx + (pw - ImGui.calcTextSizeX(b.pill())) * 0.5f, py + (ph - ImGui.getFontSize()) * 0.5f, Ui.c(b.pillText()), b.pill());
+            ImGui.popFont();
         }
         if (b.tip() != null && !b.tip().isEmpty()) Ui.tooltip(b.tip());
         return hit && b.enabled();
@@ -154,7 +171,25 @@ public final class EditorChrome {
         Btn und = new Btn("undo", "undo", null, null, false, canUndo, canUndo ? "Undo " + undo.undoLabel().orElse("") + " (Ctrl Z)" : "Nothing to undo");
         Btn red = new Btn("redo", "redo", null, null, false, canRedo, canRedo ? "Redo " + undo.redoLabel().orElse("") + " (Ctrl Shift Z)" : "Nothing to redo");
         Btn win = new Btn("win", "layout", null, null, false, s != null, "Windows");
-        Btn push = new Btn("push", "sync", "Push", null, false, false, "No project is shared on Syncmatica. Share one from its right-click menu.");
+        Btn topv = new Btn("topv", "map", null, null, s != null && s.showTopView, s != null, s != null && s.showTopView ? "Hide the top view" : "Show the top view");
+        var sync = dev.schemarray.editor.sync.SyncService.get();
+        boolean showPush = s != null && sync.installed();                 // hidden without Syncmatica (EDITOR-2.0 8)
+        var syncStatus = sync.status();
+        boolean pushing = syncStatus.state() == dev.schemarray.editor.sync.SyncService.State.PUSHING;
+        boolean syncFailed = syncStatus.state() == dev.schemarray.editor.sync.SyncService.State.FAILED;
+        int pend = sync.pending();
+        boolean canPush = showPush && sync.usable() && sync.sharedProjects() > 0 && sync.connected() && !pushing;
+        String pushTip = !showPush ? "" : !sync.usable() ? sync.reason()
+                : sync.sharedProjects() == 0 ? "No project is shared on Syncmatica. Share one from its right-click menu."
+                : !sync.connected() ? "Not connected to a server with Syncmatica"
+                : pushing ? "Pushing to Syncmatica…"
+                : syncFailed ? syncStatus.message() + " (click to retry)"
+                : pend == 0 ? "Everything is pushed" : pend + " change" + (pend == 1 ? "" : "s") + " in shared projects aren't pushed yet";
+        String pushLabel = pushing ? "Pushing " + syncStatus.done() + "/" + syncStatus.total() : "Push";
+        String pill = !showPush || sync.sharedProjects() == 0 || pushing ? null : syncFailed ? "!" : String.valueOf(pend);
+        int pillRgb = syncFailed ? Theme.ERR : pend > 0 ? Theme.WARN : Theme.CHIP;
+        int pillText = syncFailed || pend > 0 ? 0x2a1a02 : Theme.DIM;
+        Btn push = new Btn("push", "sync", pushLabel, null, false, canPush, pushTip, pill, pillRgb, pillText);
         Btn help = new Btn("help", "help", null, null, false, true, "Quick guide");
         float comboW = 128 * sc, sep = 1 * sc + 8 * sc;
 
@@ -172,9 +207,9 @@ public final class EditorChrome {
                 if (stage < 3) {
                     need += sep + btnWidth(snap, labels, caps, sc) + 4 * sc + comboW + 4 * sc + btnWidth(local, labels, caps, sc);
                     need += sep + btnWidth(und, false, false, sc) + 4 * sc + btnWidth(red, false, false, sc);
-                    need += sep + btnWidth(win, false, false, sc);
+                    need += sep + btnWidth(win, false, false, sc) + 4 * sc + btnWidth(topv, false, false, sc);
                 }
-                need += sep + btnWidth(push, labels, false, sc);
+                if (showPush) need += sep + btnWidth(push, labels, false, sc);
                 need += sep + btnWidth(help, false, false, sc);
             }
             if (need <= avail) break;
@@ -255,10 +290,14 @@ public final class EditorChrome {
                     ImGui.sameLine(0, sep);
                     if (btn(win, false, false, sc, h)) ImGui.openPopup("##winmenu");
                     drawWindowsMenu(s);
+                    ImGui.sameLine();
+                    if (btn(topv, false, false, sc, h)) s.showTopView = !s.showTopView;
                 }
                 // 8. push
-                ImGui.sameLine(0, sep);
-                btn(push, labels, false, sc, h);
+                if (showPush) {
+                    ImGui.sameLine(0, sep);
+                    if (btn(push, labels, false, sc, h)) sync.pushAll(s.scene());
+                }
                 // 9. help, or the overflow button
                 ImGui.sameLine(0, sep);
                 if (overflow) {
@@ -290,10 +329,7 @@ public final class EditorChrome {
     private static void windowItems(EditorSession s) {
         if (ImGui.menuItem("Scene", "", s.showScene)) s.showScene = !s.showScene;
         if (ImGui.menuItem("Properties", "", s.showProperties)) s.showProperties = !s.showProperties;
-        ImGui.beginDisabled();
-        ImGui.menuItem("Top view", "", false);
-        ImGui.endDisabled();
-        Ui.tooltip(MenuModel.LATER);
+        if (ImGui.menuItem("Top view", "", s.showTopView)) s.showTopView = !s.showTopView;
         ImGui.separator();
         if (ImGui.menuItem("Hide all windows", "Tab")) s.windowsHidden = !s.windowsHidden;
         ImGui.separator();
@@ -301,6 +337,7 @@ public final class EditorChrome {
             s.resetLayout = true;
             s.showScene = true;
             s.showProperties = true;
+            s.showTopView = true;
             s.windowsHidden = false;
         }
     }
@@ -403,6 +440,26 @@ public final class EditorChrome {
                 if (dx > x0 + 220 * sc) {
                     dl.addCircleFilled(dx + 3.5f * sc, y0 + h * 0.5f, 3.5f * sc, Theme.u32(col));
                     dl.addText(dx + 11 * sc, y0 + (h - fh) * 0.5f, Theme.u32(col), dt);
+                    limit = dx - 10 * sc;
+                }
+            }
+            // derived files over the cap (some copies keep the original file), then Syncmatica
+            List<String[]> notes = new ArrayList<>();
+            String capWarn = derived.capWarning();
+            if (capWarn != null) notes.add(new String[] {capWarn, String.valueOf(Theme.WARN)});
+            var sync = dev.schemarray.editor.sync.SyncService.get();
+            if (sync.installed() && sync.sharedProjects() > 0) {
+                int pend = sync.pending();
+                notes.add(pend == 0 ? new String[] {"Syncmatica up to date", String.valueOf(Theme.OK)}
+                        : new String[] {pend + " change" + (pend == 1 ? "" : "s") + " not pushed", String.valueOf(Theme.WARN)});
+            }
+            for (String[] note : notes) {
+                float tw = ImGui.calcTextSizeX(note[0]);
+                float dx = limit - tw - 14 * sc;
+                int col = Integer.parseInt(note[1]);
+                if (dx > x0 + 220 * sc) {
+                    dl.addCircleFilled(dx + 3.5f * sc, y0 + h * 0.5f, 3.5f * sc, Theme.u32(col));
+                    dl.addText(dx + 11 * sc, y0 + (h - fh) * 0.5f, Theme.u32(col), note[0]);
                     limit = dx - 10 * sc;
                 }
             }

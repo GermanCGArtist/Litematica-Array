@@ -435,16 +435,124 @@ public final class PropertiesWindow {
 
     private static void areaBody(EditorSession s, ExternalNode e, boolean locked) {
         transformSection(s, e, List.of(e.id()), true);
-        Ui.section("Area");
-        var size = e.data() != null && e.data().has("size") ? e.data().get("size").toString() : null;
-        ImGui.text("Type: " + e.typeId());
-        if (size != null) ImGui.text("Size: " + size);
-        Ui.button("Open in Heavymatica", false, false, 0, MenuModel.LATER);
-        modifiersSection(s, e, List.of(), false, false, locked);
+        var type = dev.schemarray.api.ObjectTypes.get(e.typeId());
+        Ui.section(type != null ? type.displayName() : "Missing mod");
+        if (type == null) {
+            Ui.colored(Theme.GUTTER, "The mod that provides \"" + e.typeId() + "\" is not installed.");
+            Ui.smallDim("The object keeps its data and saves it unchanged. It can still be moved, hidden and deleted.");
+        } else {
+            com.google.gson.JsonObject work = e.data().deepCopy();
+            ImPropertyUi ui = new ImPropertyUi();
+            try {
+                type.drawProperties(work, ui);
+            } catch (RuntimeException | LinkageError ex) {
+                Ui.colored(Theme.ERR, "The properties of " + e.typeId() + " failed: " + ex.getClass().getSimpleName());
+            }
+            if (ui.changed()) s.actions.execute(new dev.schemarray.editor.ops.SetExternalData(e.id(), work));
+        }
+        modifiersSection(s, e, e.mods(), true, false, locked);
         ImGui.dummy(0, 6);
         ImGui.pushStyleColor(ImGuiCol.Text, Ui.c(Ui.AREA));
-        ImGui.textWrapped("Areas never change schematic blocks and take no part in Booleans or the front order.");
+        ImGui.textWrapped("This kind of object never changes schematic blocks and takes no part in Booleans or the front order.");
         ImGui.popStyleColor();
+    }
+
+    /** The widgets of {@link dev.schemarray.api.PropertyUi} with ImGui. */
+    private static final class ImPropertyUi implements dev.schemarray.api.PropertyUi {
+        private boolean changed;
+
+        private void labelRow(String label) {
+            ImGui.alignTextToFramePadding();
+            ImGui.pushStyleColor(ImGuiCol.Text, Ui.c(Theme.DIM));
+            ImGui.text(label);
+            ImGui.popStyleColor();
+            ImGui.sameLine(110 * Ui.s());
+            ImGui.setNextItemWidth(-1);
+        }
+
+        @Override
+        public void section(String title) {
+            Ui.section(title);
+        }
+
+        @Override
+        public void text(String text) {
+            ImGui.textWrapped(text);
+        }
+
+        @Override
+        public void note(String text) {
+            Ui.smallDim(text);
+        }
+
+        @Override
+        public int intField(String label, int value) {
+            labelRow(label);
+            imgui.type.ImInt v = new imgui.type.ImInt(value);
+            if (ImGui.inputInt("##" + label, v) && v.get() != value) {
+                changed = true;
+                return v.get();
+            }
+            return value;
+        }
+
+        @Override
+        public double floatField(String label, double value) {
+            labelRow(label);
+            imgui.type.ImDouble v = new imgui.type.ImDouble(value);
+            if (ImGui.inputDouble("##" + label, v) && v.get() != value) {
+                changed = true;
+                return v.get();
+            }
+            return value;
+        }
+
+        @Override
+        public boolean checkbox(String label, boolean value) {
+            ImBoolean v = new ImBoolean(value);
+            if (ImGui.checkbox(label, v) && v.get() != value) {
+                changed = true;
+                return v.get();
+            }
+            return value;
+        }
+
+        @Override
+        public String textField(String label, String value) {
+            labelRow(label);
+            ImString v = new ImString(value == null ? "" : value, 256);
+            if (ImGui.inputText("##" + label, v) && !v.get().equals(value)) {
+                changed = true;
+                return v.get();
+            }
+            return value;
+        }
+
+        @Override
+        public int combo(String label, int index, String... options) {
+            labelRow(label);
+            imgui.type.ImInt v = new imgui.type.ImInt(index);
+            if (ImGui.combo("##" + label, v, options) && v.get() != index) {
+                changed = true;
+                return v.get();
+            }
+            return index;
+        }
+
+        @Override
+        public boolean button(String label) {
+            return ImGui.button(label);
+        }
+
+        @Override
+        public boolean changed() {
+            return changed;
+        }
+
+        @Override
+        public void markChanged() {
+            changed = true;
+        }
     }
 
     private static void blocksSection(EditorSession s, ObjectNode o) {
@@ -579,7 +687,17 @@ public final class PropertiesWindow {
             s.actions.run("proj.active");
         }
         ImGui.sameLine();
-        Ui.button("Push", false, false, 0, "No project is shared on Syncmatica. " + MenuModel.LATER);
+        var sync = dev.schemarray.editor.sync.SyncService.get();
+        if (sync.installed()) {
+            boolean shared = p.sync() == ProjectNode.Sync.SHARED;
+            if (shared) {
+                int pend = sync.pending(p);
+                if (Ui.button(pend > 0 ? "Push (" + pend + ")" : "Push", false, sync.usable() && sync.connected() && !sync.busy(),
+                        0, sync.busy() ? "A push is running" : sync.reason())) s.actions.run("proj.push");
+                ImGui.sameLine();
+            }
+            if (Ui.button(shared ? "Stop sharing" : "Share", false, shared || sync.usable(), 0, sync.reason())) s.actions.run("proj.share");
+        }
         ImGui.sameLine();
         if (ImGui.button("Export ▸")) ImGui.openPopup("##projexport");
         if (ImGui.beginPopup("##projexport")) {

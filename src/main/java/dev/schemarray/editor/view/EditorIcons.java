@@ -80,6 +80,7 @@ public final class EditorIcons {
             case "box" -> { g.dashedRect(2, 3, 12, 11); g.poly(true, 9.5f, 9.5f, 9.5f, 14, 11.2f, 12.4f); }
             case "help" -> { g.circle(8, 8, 6f); g.arc(8, 6.3f, 1.9f, 180, 400); g.line(8, 8.2f, 8, 9.2f); g.fillCircle(8, 11.2f, 0.7f); }
             case "areas" -> g.dashedRect(2.5f, 2.5f, 13.5f, 13.5f);
+            case "map" -> { g.rect(2.5f, 2.5f, 13.5f, 13.5f, 1f); g.line(8, 2.5f, 8, 13.5f); g.line(2.5f, 8, 13.5f, 8); g.fillCircle(11, 5, 1.2f); }
             case "capture" -> { g.circle(8, 8, 4f); g.line(8, 1.5f, 8, 4); g.line(8, 12, 8, 14.5f); g.line(1.5f, 8, 4, 8); g.line(12, 8, 14.5f, 8); }
             default -> { }
         }

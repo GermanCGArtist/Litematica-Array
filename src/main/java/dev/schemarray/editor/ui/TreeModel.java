@@ -161,7 +161,8 @@ public final class TreeModel {
     private Row row(Node n, int depth, boolean ancestorOnly, int matchStart, String projectName) {
         boolean has = !n.children().isEmpty();
         boolean isOpen = isFiltering() ? has : has && isOpen(n);
-        boolean missing = n instanceof ObjectNode o && o.missing();
+        boolean missing = n instanceof ObjectNode o && o.missing()
+                || n instanceof ExternalNode x && dev.schemarray.api.ObjectTypes.get(x.typeId()) == null;   // the mod is not installed
         boolean searching = !search.isBlank() && matchStart >= 0;
         return new Row(n, depth, kindOf(n), n.isContainer(), has, isOpen, lockedPart(n), effectivelyHidden(n), ancestorOnly,
                 searching ? matchStart : -1, searching ? search.strip().length() : -1, projectName, missing);

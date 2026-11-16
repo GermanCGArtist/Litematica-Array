@@ -29,6 +29,51 @@ public final class MenuModel {
     private MenuModel() {}
 
     public static final String LATER = "Coming in a later 2.0 alpha";
+
+    /** What the menus need to know about Syncmatica (set by the sync service; by default it is not installed). */
+    public interface SyncHook {
+        /** The mod is present: the Push and Share entries show at all. */
+        boolean installed();
+
+        /** Its API was found: Share and Push can work. */
+        boolean usable();
+
+        /** There is a Syncmatica server connection right now. */
+        boolean connected();
+
+        /** Why Push or Share cannot run now (shown as a tip), else empty. */
+        String reason();
+    }
+
+    private static volatile SyncHook sync = new SyncHook() {
+        @Override
+        public boolean installed() {
+            return false;
+        }
+
+        @Override
+        public boolean usable() {
+            return false;
+        }
+
+        @Override
+        public boolean connected() {
+            return false;
+        }
+
+        @Override
+        public String reason() {
+            return "Syncmatica is not installed";
+        }
+    };
+
+    public static void setSyncHook(SyncHook hook) {
+        if (hook != null) sync = hook;
+    }
+
+    public static SyncHook syncHook() {
+        return sync;
+    }
     public static final String SEP = "-";
 
     public enum State { ENABLED, DISABLED }
@@ -115,7 +160,9 @@ public final class MenuModel {
         out.add(item("add.schematic", "Schematic…", "", "object", canAdd, whyNot));
         out.add(item("add.assembly", "Assembly (.lasm)…", "", "assembly", canAdd, whyNot));
         out.add(item("add.link", "Link project as assembly…", "", "link", canAdd, whyNot));
-        out.add(later("add.area", "Heavymatica area", "", "areas"));
+        for (dev.schemarray.api.SceneObjectType t : dev.schemarray.api.ObjectTypes.all()) {      // objects of other mods (API 2)
+            out.add(item("add.ext:" + t.id(), t.displayName(), "", "areas", canAdd, whyNot));
+        }
         out.add(item("add.folder", "Folder", "", "folder", canAdd, whyNot));
         return out;
     }
@@ -161,7 +208,7 @@ public final class MenuModel {
     }
 
     private static boolean hasMod(Node n, Class<? extends Modifier> type) {
-        List<Modifier> mods = n instanceof ObjectNode o ? o.mods() : n instanceof AssemblyNode a ? a.mods() : List.of();
+        List<Modifier> mods = n instanceof ObjectNode o ? o.mods() : n instanceof AssemblyNode a ? a.mods() : n instanceof ExternalNode x ? x.mods() : List.of();
         for (Modifier m : mods) if (type.isInstance(m)) return true;
         return false;
     }
@@ -348,9 +395,13 @@ public final class MenuModel {
         m.add(sub("Add", "plus", addItems(true, "")));
         if (!p.active()) m.add(item("proj.link", "Link into active project as assembly", "", "link", c.scene().activeProject() != null, "There is no active project"));
         m.add(sep());
-        if (p.sync() == ProjectNode.Sync.SHARED) m.add(later("proj.push", "Push changes to Syncmatica", "", "sync"));
-        m.add(later("proj.share", p.sync() == ProjectNode.Sync.SHARED ? "Stop sharing" : "Share on Syncmatica", "", "sync"));
-        m.add(sep());
+        SyncHook sh = sync;
+        if (sh.installed()) {                                  // hidden without the mod (DESIGN 10.7)
+            boolean shared = p.sync() == ProjectNode.Sync.SHARED;
+            if (shared) m.add(item("proj.push", "Push changes to Syncmatica", "", "sync", sh.usable() && sh.connected(), sh.reason().isEmpty() ? "Not connected" : sh.reason()));
+            m.add(item("proj.share", shared ? "Stop sharing" : "Share on Syncmatica", "", "sync", shared || sh.usable(), sh.reason().isEmpty() ? "Syncmatica is not usable" : sh.reason()));
+            m.add(sep());
+        }
         m.add(sub("Export", "export", List.of(item("export.zip", "Project (.zip)", "", "export"), item("export.bake", "Bake to one .litematic", "", "export"))));
         m.add(item("proj.explorer", "Show in file explorer", "", ""));
         m.add(sep());

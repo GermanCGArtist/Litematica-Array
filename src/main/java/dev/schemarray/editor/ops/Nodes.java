@@ -63,12 +63,14 @@ final class Nodes {
     static List<Modifier> mods(Node n) {
         if (n instanceof ObjectNode o) return o.mods();
         if (n instanceof AssemblyNode a) return a.mods();
+        if (n instanceof ExternalNode x) return x.mods();
         return null;
     }
 
     static void setMods(Node n, List<Modifier> mods) {
         if (n instanceof ObjectNode o) o.setMods(mods);
         else if (n instanceof AssemblyNode a) a.setMods(mods);
+        else if (n instanceof ExternalNode x) x.setMods(mods);
         else throw new IllegalArgumentException(q(n) + " has no modifiers");
     }
 
@@ -327,6 +329,7 @@ final class Nodes {
                 ExternalNode n = new ExternalNode(id, x.name(), x.typeId());
                 n.setTransform(x.transform());
                 n.setData(x.data().deepCopy());
+                n.setMods(copyMods(x.mods()));
                 return n;
             }
             throw new IllegalArgumentException("cannot copy " + src);

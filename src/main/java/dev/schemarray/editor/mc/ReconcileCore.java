@@ -60,7 +60,20 @@ public final class ReconcileCore {
 
     public record Result(int created, int updated, int removed, int adopted, int deferred) {}
 
-    private record Slot(Map<String, String> ids) {}
+    /** The placement ids of one object's cells and the identity its derived files are keyed by. */
+    private record Slot(Map<String, String> ids, UUID base) {}
+
+    /**
+     * One placed copy of an object as the last pass saw it, for derived files (masks) and Syncmatica: {@code slot}
+     * identifies the copy ({@link #slotOf}), {@code ids} is the live cell-to-placement map of its object.
+     */
+    public record CellRef(UUID slot, ObjectNode object, Path base, String cell, Transform world, Node owner, ProjectNode project,
+                          Map<String, String> ids) {
+        /** The Litematica placement of this copy, or null when it is not created yet. */
+        public String placementId() {
+            return ids.get(cell);
+        }
+    }
 
     private final PlacementPort port;
     private final SizeSource sizes;
@@ -71,7 +84,11 @@ public final class ReconcileCore {
     /** Local view (runtime only, never saved): the owners that stay visible; null = everything. */
     private Set<UUID> localOnly;
     /** Derived files (trims and Booleans): which file the base cell of an object uses right now. */
-    private DerivedPort derived = ob -> null;
+    private DerivedPort derived = slot -> null;
+    /** Every placed copy of the last pass (see {@link CellRef}). */
+    private List<CellRef> cellRefs = List.of();
+    /** Where the derived files of Loose objects live (a folder with {@code .cache/derived}); null = none. */
+    private Path looseCache;
     /** Base placements this class hid because their object is a wire cutter (so un-wiring shows them again). */
     private final Set<String> wireHidden = new HashSet<>();
 
@@ -105,7 +122,26 @@ public final class ReconcileCore {
     }
 
     public void setDerived(DerivedPort d) {
-        this.derived = d == null ? ob -> null : d;
+        this.derived = d == null ? slot -> null : d;
+    }
+
+    /** The copies the last pass placed (visible ones only), in walk order: base cell first for every object. */
+    public List<CellRef> cellRefs() {
+        return cellRefs;
+    }
+
+    /** The folder that holds {@code .cache/derived} for Loose objects, or null. */
+    public Path looseCache() {
+        return looseCache;
+    }
+
+    public void setLooseCache(Path dir) {
+        this.looseCache = dir;
+    }
+
+    /** The key of a copy for {@link DerivedPort}: the object id for the base cell of a model object, else derived from it. */
+    static UUID slotOf(UUID base, String cell) {
+        return ObjectNode.BASE_CELL.equals(cell) ? base : Ids.derived(base + "#" + cell);
     }
 
     /** Sizes and linked parts with this reconciler's rules (for planning masks). */
@@ -198,6 +234,7 @@ public final class ReconcileCore {
         final Set<String> existing;
         final Set<String> modelIds = new HashSet<>();
         final Set<String> claimed = new HashSet<>();
+        final List<CellRef> cells = new ArrayList<>();
         int created, updated, removed, adopted, deferred;
 
         Run(Scene scene, int tick, Set<String> existing) {
@@ -231,6 +268,7 @@ public final class ReconcileCore {
             }
         }
         prevModelIds = r.modelIds;
+        cellRefs = r.cells;
         if (!restored.isEmpty()) {
             for (String id : restored) {
                 if (!r.modelIds.contains(id) && r.existing.remove(id)) {
@@ -264,7 +302,7 @@ public final class ReconcileCore {
         if (!o && localOnly != null && proj != null && (n instanceof ObjectNode || n instanceof AssemblyNode)
                 && !localOnly.contains(r.scene.ownerOf(n).id())) o = true;
         if (n instanceof ObjectNode ob) {
-            object(new Slot(ob.placementIds()), ob, o, r.scene.worldTransform(ob), proj, r, false, null);
+            object(new Slot(ob.placementIds(), ob.id()), ob, o, r.scene.worldTransform(ob), proj, r, false, null, null);
         } else if (n instanceof AssemblyNode a) {
             assembly(a, o, proj, r);
         } else {
@@ -279,20 +317,21 @@ public final class ReconcileCore {
      */
     private void assembly(AssemblyNode a, boolean off, ProjectNode proj, Run r) {
         Transform aw = r.scene.worldTransform(a);
+        Node top = r.scene.ownerOf(a);
         Path base = projectBase(proj);
         AssemblyBounds.Env env = new CoreEnv(r.scene);
         AssemblyBounds.Linked parts = AssemblyBounds.partsOf(a, base, env);
         Map<String, Vec3i> cells = Map.of();
         if (!off && parts != null && AssemblyBounds.hasEnabledArray(a)) cells = AssemblyBounds.frame(a, base, env).cells();
         if (a.isLinked()) {
-            if (parts != null) for (Node p : parts.parts()) visitRuntime(p, off, aw, a.id(), "", parts.base(), proj, r, 0, env);
+            if (parts != null) for (Node p : parts.parts()) visitRuntime(p, off, aw, a.id(), "", parts.base(), proj, r, 0, env, top);
         } else {
             for (Node c : new ArrayList<>(a.children())) visit(c, off, proj, r);
         }
         if (parts == null) return;
         for (var cell : cells.entrySet()) {
             Transform cw = new Transform(aw.apply(cell.getValue()), aw.rot(), aw.mirror());
-            for (Node p : new ArrayList<>(parts.parts())) visitRuntime(p, off, cw, a.id(), cell.getKey(), parts.base(), proj, r, 0, env);
+            for (Node p : new ArrayList<>(parts.parts())) visitRuntime(p, off, cw, a.id(), cell.getKey(), parts.base(), proj, r, 0, env, top);
         }
     }
 
@@ -302,25 +341,25 @@ public final class ReconcileCore {
      * (without the cell part for the base cell, as before).
      */
     private void visitRuntime(Node node, boolean off, Transform parentWorld, UUID instanceId, String cell, Path base, ProjectNode proj, Run r,
-                              int depth, AssemblyBounds.Env env) {
+                              int depth, AssemblyBounds.Env env, Node top) {
         boolean o = off || node.hidden();
         Transform w = parentWorld.then(node.localTransform());
         UUID key = Ids.derived(cell.isEmpty() ? instanceId + ":" + node.id() : instanceId + ":" + cell + ":" + node.id());
         if (node instanceof ObjectNode ob) {
-            Slot s = new Slot(linkedIds.computeIfAbsent(key, k -> new LinkedHashMap<>()));
-            object(s, ob, o, w, proj, r, true, base);
+            Slot s = new Slot(linkedIds.computeIfAbsent(key, k -> new LinkedHashMap<>()), key);
+            object(s, ob, o, w, proj, r, true, base, top);
         } else if (node instanceof AssemblyNode a) {
             if (depth >= AssemblyBounds.MAX_DEPTH) return;
             AssemblyBounds.Linked parts = AssemblyBounds.partsOf(a, base, env);
             if (parts == null) return;
             Map<String, Vec3i> cells = o || !AssemblyBounds.hasEnabledArray(a) ? Map.of() : AssemblyBounds.frame(a, base, env).cells();
-            for (Node p : parts.parts()) visitRuntime(p, o, w, key, "", parts.base(), proj, r, depth + 1, env);
+            for (Node p : parts.parts()) visitRuntime(p, o, w, key, "", parts.base(), proj, r, depth + 1, env, top);
             for (var c : cells.entrySet()) {
                 Transform cw = new Transform(w.apply(c.getValue()), w.rot(), w.mirror());
-                for (Node p : parts.parts()) visitRuntime(p, o, cw, key, c.getKey(), parts.base(), proj, r, depth + 1, env);
+                for (Node p : parts.parts()) visitRuntime(p, o, cw, key, c.getKey(), parts.base(), proj, r, depth + 1, env, top);
             }
         } else {
-            for (Node c : node.children()) visitRuntime(c, o, w, instanceId, cell, base, proj, r, depth, env);
+            for (Node c : node.children()) visitRuntime(c, o, w, instanceId, cell, base, proj, r, depth, env, top);
         }
     }
 
@@ -365,7 +404,7 @@ public final class ReconcileCore {
 
     // ------------------------------------------------------------------------------------------ one object
 
-    private void object(Slot s, ObjectNode ob, boolean off, Transform world, ProjectNode proj, Run r, boolean linked, Path base) {
+    private void object(Slot s, ObjectNode ob, boolean off, Transform world, ProjectNode proj, Run r, boolean linked, Path base, Node top) {
         Map<String, String> ids = s.ids;
         r.modelIds.addAll(ids.values());
         if (off) {
@@ -428,11 +467,7 @@ public final class ReconcileCore {
 
         boolean enabled = bs == null || bs.enabled();
         boolean render = !ob.wire() && (bs == null || bs.render() || (baseId != null && wireHidden.contains(baseId)));
-        Path baseFile = file;
-        if (!linked && base == null && proj != null) {
-            Path d = derived.fileFor(ob);
-            if (d != null) baseFile = d;
-        }
+        Node owner = top != null ? top : r.scene.ownerOf(ob);
         for (var e : want.entrySet()) {
             String key = e.getKey();
             Transform t = e.getValue();
@@ -440,7 +475,8 @@ public final class ReconcileCore {
             String id = ids.get(key);
             if (id != null && !r.claimed.add(id)) id = null;   // another node already owns this placement
             PlacementState st = id == null || !r.existing.contains(id) ? null : isBase ? bs : port.read(id);
-            Path cellFile = isBase ? baseFile : file;
+            if (!ob.wire()) r.cells.add(new CellRef(slotOf(s.base(), key), ob, base, key, t, owner, proj, ids));
+            Path cellFile = ob.wire() ? file : derivedOr(slotOf(s.base(), key), file);
             boolean wrongFile = st != null && !samePath(st.file(), cellFile);
             if (st == null || wrongFile) {
                 if (r.created >= budget) {
@@ -491,6 +527,11 @@ public final class ReconcileCore {
                 port.copySubRegions(ids.get(ObjectNode.BASE_CELL), id);
             }
         }
+    }
+
+    private Path derivedOr(UUID slot, Path original) {
+        Path d = derived.fileFor(slot);
+        return d != null ? d : original;
     }
 
     // ------------------------------------------------------------------------------------------ files

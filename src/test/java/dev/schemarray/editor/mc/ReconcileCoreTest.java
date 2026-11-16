@@ -824,21 +824,49 @@ class ReconcileCoreTest {
     // ------------------------------------------------------------------------------------------ derived files, wire cutters
 
     @Test
-    void theBaseCellSwitchesToTheDerivedFileAndArrayCellsKeepTheOriginal() {
+    void eachCellAsksItsOwnDerivedFileAndTheOthersKeepTheOriginal() {
         ObjectNode o = obj("a");
         o.mods().add(array(2, 1));
         proj.addChild(o);
         run();
         String baseId = o.placementIds().get(ObjectNode.BASE_CELL);
         Path derived = dir.resolve(".cache/derived/x-1.litematic");
-        core.setDerived(ob -> derived);
+        core.setDerived(slot -> slot.equals(o.id()) ? derived : null);   // only the base cell has a mask
         run();
         assertEquals(derived, port.read(o.placementIds().get(ObjectNode.BASE_CELL)).file());
         assertEquals(baseId, o.placementIds().get(ObjectNode.BASE_CELL), "the placement id is kept");
         assertEquals(dir.resolve("files").resolve("a.litematic"), port.read(o.placementIds().get("1")).file());
-        core.setDerived(ob -> null);   // the mask is gone: back to the original
+        core.setDerived(slot -> null);   // the mask is gone: back to the original
         run();
         assertEquals(dir.resolve("files").resolve("a.litematic"), port.read(o.placementIds().get(ObjectNode.BASE_CELL)).file());
+    }
+
+    @Test
+    void anArrayCellSwitchesToItsDerivedFile() {
+        ObjectNode o = obj("a");
+        o.mods().add(array(2, 1));
+        proj.addChild(o);
+        run();
+        Path derived = dir.resolve(".cache/derived/x-cell.litematic");
+        var cell = core.cellRefs().stream().filter(c -> c.cell().equals("1")).findFirst().orElseThrow();
+        core.setDerived(slot -> slot.equals(cell.slot()) ? derived : null);
+        run();
+        assertEquals(derived, port.read(o.placementIds().get("1")).file());
+        assertEquals(dir.resolve("files").resolve("a.litematic"), port.read(o.placementIds().get(ObjectNode.BASE_CELL)).file());
+    }
+
+    @Test
+    void everyVisibleCellIsListedAndWireObjectsAreNot() {
+        ObjectNode o = obj("a");
+        o.mods().add(array(2, 1));
+        ObjectNode w = obj("c");
+        w.setWire(true);
+        proj.addChild(o);
+        proj.addChild(w);
+        run();
+        assertEquals(2, core.cellRefs().size());
+        assertEquals(o.id(), core.cellRefs().get(0).slot(), "the base cell's slot is the object id");
+        assertTrue(core.cellRefs().stream().allMatch(c -> c.object() == o));
     }
 
     @Test

@@ -159,6 +159,11 @@ public final class LitematicaAdapter implements PlacementPort {
         return id.toString();
     }
 
+    /** The Litematica {@code SchematicPlacement} behind a hash id (opaque for callers that drive other mods by reflection), or null. */
+    public Object placementObject(String hashId) {
+        return find(hashId);
+    }
+
     @Override
     public void update(String hashId, Vec3i origin, Rot rot, Mirror mirror, boolean enabled, boolean render) {
         SchematicPlacement p = find(hashId);

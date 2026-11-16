@@ -65,6 +65,17 @@ public final class EditorActions {
 
         void focusFilter();
 
+        /** Pushes a shared project to Syncmatica. */
+        default void syncPush(ProjectNode p) {}
+
+        /** Starts or stops sharing a project on Syncmatica. */
+        default void syncShare(ProjectNode p) {}
+
+        /** The block the camera orbits (where new objects of other mods are put); null when unknown. */
+        default Vec3i cameraTarget() {
+            return null;
+        }
+
         /** Makes a project the active one. */
         void setActive(ProjectNode p);
 
@@ -155,7 +166,7 @@ public final class EditorActions {
 
     /** Which entry ids {@link #run} handles (the tests check every enabled menu entry is in it). */
     public static boolean handles(String id) {
-        if (id.startsWith("move.to:")) return true;
+        if (id.startsWith("move.to:") || id.startsWith("add.ext:")) return true;
         return switch (id) {
             case "add.schematic", "add.folder", "select.all", "select.none", "select.contents", "frame.all", "frame",
                  "show.hidden", "undo", "redo", "duplicate", "dup.linked", "rename", "t.rot.cw", "t.rot.ccw", "t.mirror",
@@ -164,7 +175,7 @@ public final class EditorActions {
                  "t.move", "box", "local", "local.leave",
                  "part.makelocal", "folder.toproject", "loose.toproject", "proj.active", "proj.explorer", "proj.close",
                  "add.assembly", "add.link", "proj.link", "asm.realise", "asm.reload", "asm.open", "asm.savelasm", "assembly.createlinked",
-                 "export.zip", "export.bake", "export.schem" -> true;
+                 "export.zip", "export.bake", "export.schem", "proj.push", "proj.share" -> true;
             default -> false;
         };
     }
@@ -222,6 +233,12 @@ public final class EditorActions {
             boolean same = t != null && !nodes().isEmpty() && nodes().stream().allMatch(n -> scene().projectOf(n) == scene().projectOf(t));
             return Optional.of(same ? (Command) new dev.schemarray.editor.ops.Reparent(ids, target, -1) : (Command) new MoveToProject(ids, target, -1));
         }
+        if (id.startsWith("add.ext:")) {
+            dev.schemarray.api.SceneObjectType t = dev.schemarray.api.ObjectTypes.get(id.substring("add.ext:".length()));
+            if (t == null) return Optional.empty();
+            Vec3i at = host.cameraTarget();
+            return Optional.of(new dev.schemarray.editor.ops.AddExternal(addParent().id(), -1, t.id(), t.displayName(), t.create(), at == null ? Vec3i.ZERO : at));
+        }
         return switch (id) {
             case "duplicate" -> Optional.of(new Duplicate(ids, dupOffset()));
             case "dup.linked" -> Optional.of(new LinkedDuplicate(ids, dupOffset()));
@@ -252,7 +269,7 @@ public final class EditorActions {
         };
     }
 
-private static boolean hasArray(Node n) {        List<dev.schemarray.editor.core.Modifier> mods = n instanceof ObjectNode o ? o.mods() : n instanceof AssemblyNode a ? a.mods() : List.of();        for (dev.schemarray.editor.core.Modifier m : mods) if (m instanceof ArrayModifier) return true;        return false;    }
+private static boolean hasArray(Node n) {        List<dev.schemarray.editor.core.Modifier> mods = n instanceof ObjectNode o ? o.mods() : n instanceof AssemblyNode a ? a.mods() : n instanceof dev.schemarray.editor.core.ExternalNode x ? x.mods() : List.of();        for (dev.schemarray.editor.core.Modifier m : mods) if (m instanceof ArrayModifier) return true;        return false;    }
     private <T extends Node> Optional<T> single(Class<T> type) {
         List<Node> n = nodes();
         if (n.size() != 1 || !type.isInstance(n.get(0))) return Optional.empty();
@@ -394,6 +411,16 @@ private static boolean hasArray(Node n) {        List<dev.schemarray.editor.core
             case "add.schematic":
                 host.requestAddSchematic(addParent().id());
                 return true;
+            case "proj.push":
+                return single(ProjectNode.class).map(p -> {
+                    host.syncPush(p);
+                    return true;
+                }).orElse(false);
+            case "proj.share":
+                return single(ProjectNode.class).map(p -> {
+                    host.syncShare(p);
+                    return true;
+                }).orElse(false);
             case "part.select.owner": {
                 if (nodes.size() == 1) {
                     Node owner = scene.ownerOf(nodes.get(0));
@@ -517,6 +544,14 @@ private static boolean hasArray(Node n) {        List<dev.schemarray.editor.core
             if (ok) {
                 sel.clear();
                 host.toast(ToastQueue.Level.INFO, "Deleted " + what, "Undo", this::undo);
+            }
+            return ok;
+        }
+        if (cmd instanceof dev.schemarray.editor.ops.AddExternal ae) {
+            ok = execute(ae);
+            if (ok) {
+                sel.set(ae.nodeId());
+                host.showInTree(ae.nodeId());
             }
             return ok;
         }

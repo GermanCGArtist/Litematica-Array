@@ -3,8 +3,8 @@ package dev.schemarray.editor.mc;
 import dev.schemarray.editor.core.AssemblyBounds;
 import dev.schemarray.editor.core.AssemblyNode;
 import dev.schemarray.editor.core.Box;
+import dev.schemarray.editor.core.CellMasks;
 import dev.schemarray.editor.core.MaskPlan;
-import dev.schemarray.editor.core.Node;
 import dev.schemarray.editor.core.ObjectNode;
 import dev.schemarray.editor.core.ProjectNode;
 import dev.schemarray.editor.core.Scene;
@@ -37,18 +37,22 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 /**
- * Derived files (EDITOR-2.0 section 5): for every project object whose {@link MaskPlan} is not empty, a private copy of
- * its schematic with the masked blocks set to air, written to {@code .cache/derived/<objectId>-<maskHash>.litematic}.
+ * Derived files (EDITOR-2.0 section 5): for every placed copy of an object whose {@link MaskPlan} is not empty, a
+ * private copy of its schematic with the masked blocks set to air, written to
+ * {@code .cache/derived/<objectId>-<maskHash>.litematic}.
+ *
+ * <p>Every copy has its own mask (its world position differs): the base cell and the array cells of project objects,
+ * Loose objects (their cache lives in {@link ReconcileCore#looseCache()}) and the parts of linked assemblies. Copies
+ * whose mask hash is the same share one file; one object gets at most {@link CellMasks#MAX_FILES} files per pass, the
+ * copies beyond that keep the original file and {@link #capWarning()} says so.
  *
  * <p>Threads: {@link #tick} plans on the client thread (cheap: sizes, boxes, modification times and hashes); the
  * files are loaded, masked and written on one daemon worker. A plan must stay unchanged for {@link #DEBOUNCE}
  * ticks and no gizmo drag or undo transaction may run ({@link #setBusy}) before a job starts; a newer plan of the
- * same object replaces a queued one. A cache hit (the file exists) starts nothing but a count-only pass for the
- * numbers shown in the UI. When a job ends, {@link #fileFor} returns the new file and the reconciler swaps the base
- * cell on its next tick through its wrong-file path. Nothing is ever deleted: {@link #cleanup} moves unreferenced
+ * same copy replaces a queued one. A cache hit (the file exists) starts nothing but a count-only pass for the
+ * numbers shown in the UI. When a job ends, {@link #fileFor} returns the new file and the reconciler swaps the cell
+ * on its next tick through its wrong-file path. Nothing is ever deleted: {@link #cleanup} moves unreferenced
  * files to {@code .trash}.
- *
- * <p>Array copies keep using the original file; only the base cell of an object is trimmed or cut.
  */
 public final class DerivedFiles implements DerivedPort {
     /** Ticks a plan has to stay the same before its job starts (planning runs every {@link #PLAN_EVERY} ticks). */
@@ -57,7 +61,7 @@ public final class DerivedFiles implements DerivedPort {
 
     public enum Status { BUILDING, READY, FAILED }
 
-    /** What the UI shows about one object. Counts are -1 until known. */
+    /** What the UI shows about one object (its base cell). Counts are -1 until known. */
     public record Info(Status status, String error, long removed, long booleanRemoved, Map<UUID, Long> trimBy) {}
 
     /** The outcome of an on-demand build (Apply, export). */
@@ -73,23 +77,36 @@ public final class DerivedFiles implements DerivedPort {
         return SHARED;
     }
 
-    private static final class Entry {
-        String wantedHash;
-        MaskPlan.Plan wanted;
+    /** One derived file (shared by every copy with the same object and mask hash). */
+    private static final class FileEntry {
+        final UUID objectId;
+        MaskPlan.Plan plan;
         int since;
         boolean launched;
+        boolean wantCount;       // the base cell of a model object: the UI wants the numbers
         Path projectDir;
         Path source;
-        Path file;               // the file the base cell uses (may be of an older plan while the new one builds)
-        String fileHash;
+        Path file;               // set once the file exists
         Status status = Status.BUILDING;
         String error;
         long removed = -1, booleanRemoved = -1;
         Map<UUID, Long> trimBy = Map.of();
+
+        FileEntry(UUID objectId) {
+            this.objectId = objectId;
+        }
     }
 
-    private final Map<UUID, Entry> entries = new HashMap<>();
+    /** What one placed copy wants and shows (it keeps the older file while a newer one builds). */
+    private static final class SlotState {
+        String wantedKey;
+        Path shown;
+    }
+
+    private final Map<String, FileEntry> files = new HashMap<>();
+    private final Map<UUID, SlotState> slots = new HashMap<>();
     private final Set<UUID> plannedProjects = new HashSet<>();
+    private Map<UUID, Integer> capped = Map.of();
     private BooleanSupplier busy = () -> false;
     private ReconcileCore core;
     private int lastPlan = Integer.MIN_VALUE;
@@ -108,8 +125,10 @@ public final class DerivedFiles implements DerivedPort {
 
     /** Forgets everything (new world). Files stay in the cache. */
     public void reset() {
-        entries.clear();
+        files.clear();
+        slots.clear();
         plannedProjects.clear();
+        capped = Map.of();
         synchronized (lock) {
             queue.clear();
         }
@@ -118,43 +137,62 @@ public final class DerivedFiles implements DerivedPort {
     // ------------------------------------------------------------------------------------------ client thread
 
     @Override
-    public Path fileFor(ObjectNode object) {
-        Entry e = entries.get(object.id());
-        return e == null ? null : e.file;
+    public Path fileFor(UUID slot) {
+        SlotState st = slots.get(slot);
+        return st == null ? null : st.shown;
     }
 
-    /** The ready derived file of an object (used by Bake), or null. */
+    /** The ready derived file of an object's base cell (used by Bake), or null. */
     public Path readyFile(UUID objectId) {
-        Entry e = entries.get(objectId);
+        FileEntry e = entryOf(objectId);
         return e != null && e.status == Status.READY ? e.file : null;
     }
 
+    private FileEntry entryOf(UUID baseSlot) {
+        SlotState st = slots.get(baseSlot);
+        return st == null || st.wantedKey == null ? null : files.get(st.wantedKey);
+    }
+
     public Info infoOf(UUID objectId) {
-        Entry e = entries.get(objectId);
+        FileEntry e = entryOf(objectId);
         return e == null ? null : new Info(e.status, e.error, e.removed, e.booleanRemoved, e.trimBy);
     }
 
-    /** Objects whose derived file is being built or waits for its debounce. */
+    /** Derived files that are being built or wait for their debounce. */
     public int working() {
         int n = 0;
-        for (Entry e : entries.values()) if (e.status == Status.BUILDING) n++;
+        for (FileEntry e : files.values()) if (e.status == Status.BUILDING) n++;
         return n;
     }
 
     public int failed() {
         int n = 0;
-        for (Entry e : entries.values()) if (e.status == Status.FAILED) n++;
+        for (FileEntry e : files.values()) if (e.status == Status.FAILED) n++;
         return n;
     }
 
     public String firstError() {
-        for (Entry e : entries.values()) if (e.status == Status.FAILED) return e.error;
+        for (FileEntry e : files.values()) if (e.status == Status.FAILED) return e.error;
         return null;
+    }
+
+    /** Objects that hit the cap of {@link CellMasks#MAX_FILES} files in the last planning pass. */
+    public int cappedObjects() {
+        return capped.size();
+    }
+
+    /** A warning for the status bar when some copies were left on the original file because of the cap, else null. */
+    public String capWarning() {
+        if (capped.isEmpty()) return null;
+        int cells = 0;
+        for (int n : capped.values()) cells += n;
+        return capped.size() + (capped.size() == 1 ? " object has" : " objects have") + " more than " + CellMasks.MAX_FILES
+                + " trim variants: " + cells + " cop" + (cells == 1 ? "y keeps" : "ies keep") + " the original file";
     }
 
     /** Starts the failed jobs again. */
     public void retryFailed() {
-        for (Entry e : entries.values()) {
+        for (FileEntry e : files.values()) {
             if (e.status == Status.FAILED) {
                 e.status = Status.BUILDING;
                 e.error = null;
@@ -164,71 +202,77 @@ public final class DerivedFiles implements DerivedPort {
         }
     }
 
-    /** Plans every object of the projects of this world and starts the jobs that are due. Call once per client tick. */
+    /** Plans every placed copy of the projects of this world (and Loose) and starts the jobs that are due. Call once per client tick. */
     public void tick(Scene scene, String world, String dim, int tick) {
         if (core == null || tick - lastPlan < PLAN_EVERY) return;
         lastPlan = tick;
         if (busy.getAsBoolean()) {
-            for (Entry e : entries.values()) e.since = Math.max(e.since, tick);   // wait for the release
+            for (FileEntry e : files.values()) e.since = Math.max(e.since, tick);   // wait for the release
             return;
         }
         lastScene = scene;
         PlanEnv env = new PlanEnv(scene, core);
         var owners = scene.frontOwnersInWorld(world);
-        Set<UUID> seen = new HashSet<>();
-        for (ProjectNode p : scene.projects()) {
-            if (!p.world().equals(world) || !p.dim().equals(dim)) continue;
-            Path dir = core.projectDir(p);
-            if (dir == null) continue;
-            plannedProjects.add(p.id());
-            for (Node n : p.subtree()) {
-                if (!(n instanceof ObjectNode o)) continue;
-                MaskPlan.Plan plan;
-                try {
-                    plan = MaskPlan.plan(scene, o, owners, env, MaskPlan.Filter.ALL);
-                } catch (RuntimeException | LinkageError ex) {
-                    continue;
-                }
-                if (plan.isEmpty()) continue;
-                seen.add(o.id());
-                handle(o, dir, plan, tick);
+        List<CellMasks.Cell> cells = new ArrayList<>();
+        Map<UUID, ReconcileCore.CellRef> refs = new HashMap<>();
+        Map<UUID, Path> dirs = new HashMap<>();
+        for (ReconcileCore.CellRef ref : core.cellRefs()) {
+            ProjectNode p = ref.project();
+            Path dir;
+            if (p != null) {
+                if (!p.world().equals(world) || !p.dim().equals(dim)) continue;
+                dir = core.projectDir(p);
+                if (dir != null) plannedProjects.add(p.id());
+            } else {
+                dir = core.looseCache();
             }
+            if (dir == null) continue;
+            cells.add(new CellMasks.Cell(ref.slot(), new MaskPlan.Subject(ref.object(), ref.base(), ref.world(), ref.owner(), p == null)));
+            refs.put(ref.slot(), ref);
+            dirs.put(ref.slot(), dir);
         }
-        entries.keySet().removeIf(id -> !seen.contains(id));
+        CellMasks.Result res = CellMasks.plan(scene, cells, owners, env, MaskPlan.Filter.ALL);
+        capped = res.capped();
+        Set<String> referenced = new HashSet<>();
+        for (var e : res.plans().entrySet()) {
+            UUID slot = e.getKey();
+            MaskPlan.Plan plan = e.getValue();
+            ReconcileCore.CellRef ref = refs.get(slot);
+            String key = ref.object().id() + "-" + plan.hash();
+            referenced.add(key);
+            FileEntry fe = files.get(key);
+            if (fe == null) {
+                fe = new FileEntry(ref.object().id());
+                fe.plan = plan;
+                fe.projectDir = dirs.get(slot);
+                fe.source = core.fileOf(scene, ref.object(), ref.base());
+                fe.since = tick;
+                Path target = ProjectLayout.derivedFile(fe.projectDir, fe.objectId, plan.hash());
+                if (Files.isRegularFile(target)) {      // a cache hit needs no debounce
+                    fe.file = target;
+                    fe.status = Status.READY;
+                }
+                files.put(key, fe);
+            }
+            if (slot.equals(ref.object().id())) fe.wantCount = true;
+            launch(key, fe, tick);
+            SlotState st = slots.computeIfAbsent(slot, k -> new SlotState());
+            st.wantedKey = key;
+            if (fe.status == Status.READY && fe.file != null) st.shown = fe.file;
+        }
+        slots.keySet().retainAll(res.plans().keySet());
+        files.keySet().retainAll(referenced);
     }
 
-    private void handle(ObjectNode o, Path dir, MaskPlan.Plan plan, int tick) {
-        Entry e = entries.computeIfAbsent(o.id(), k -> new Entry());
-        e.projectDir = dir;
-        if (!plan.hash().equals(e.wantedHash)) {
-            e.wanted = plan;
-            e.wantedHash = plan.hash();
-            e.removed = -1;
-            e.booleanRemoved = -1;
-            e.trimBy = Map.of();
-            e.since = tick;
-            e.launched = false;
-            if (e.status == Status.FAILED) e.status = Status.BUILDING;
-            return;
-        }
+    /** Starts the job of a file when it is due: a missing file after the debounce, a cache hit only for the numbers. */
+    private void launch(String key, FileEntry e, int tick) {
         if (e.launched || tick - e.since < DEBOUNCE) return;
+        boolean exists = e.file != null;
+        if (exists && (!e.wantCount || e.removed >= 0)) return;
         e.launched = true;
-        Path target = ProjectLayout.derivedFile(dir, o.id(), plan.hash());
-        Path source = core.fileOf(scene(), o, null);
-        e.source = source;
-        boolean exists = Files.isRegularFile(target);
-        if (exists) {
-            e.file = target;
-            e.fileHash = plan.hash();
-            e.status = Status.READY;
-            e.error = null;
-            if (e.removed >= 0) return;
-        } else {
-            e.status = Status.BUILDING;
-        }
-        UUID id = o.id();
-        String hash = plan.hash();
-        submit(id, new Job(plan, source, target, !exists, r -> done(id, hash, target, !exists, r)));
+        Path target = ProjectLayout.derivedFile(e.projectDir, e.objectId, e.plan.hash());
+        if (!exists) e.status = Status.BUILDING;
+        submit(key, new Job(e.plan, e.source, target, !exists, r -> done(key, target, r)));
     }
 
     private Scene lastScene;
@@ -242,16 +286,15 @@ public final class DerivedFiles implements DerivedPort {
         lastScene = s;
     }
 
-    private void done(UUID id, String hash, Path target, boolean wrote, Result r) {
-        Entry e = entries.get(id);
-        if (e == null || !hash.equals(e.wantedHash)) return;     // superseded: the file stays in the cache
+    private void done(String key, Path target, Result r) {
+        FileEntry e = files.get(key);
+        if (e == null) return;     // superseded: the file stays in the cache
         if (r.error != null) {
             e.status = Status.FAILED;
             e.error = r.error;
             return;
         }
         e.file = target;
-        e.fileHash = hash;
         e.status = Status.READY;
         e.error = null;
         e.removed = r.removed;
@@ -283,7 +326,7 @@ public final class DerivedFiles implements DerivedPort {
         return MaskPlan.plan(scene, o, scene.frontOwnersInWorld(p.world()), new PlanEnv(scene, core), f);
     }
 
-    /** Moves derived files of a project that no object uses any more to {@code .trash/derived}. Never deletes. */
+    /** Moves derived files of a project that no copy uses any more to {@code .trash/derived}. Never deletes. */
     public void cleanup(ProjectNode p) {
         if (core == null || !plannedProjects.contains(p.id()) || working() > 0 || busyJobs() > 0) return;
         Path dir = core.projectDir(p);
@@ -291,12 +334,11 @@ public final class DerivedFiles implements DerivedPort {
         Path derived = ProjectLayout.derivedDir(dir);
         if (!Files.isDirectory(derived)) return;
         Set<String> keep = new HashSet<>();
-        for (Node n : p.subtree()) {
-            Entry e = entries.get(n.id());
-            if (!(n instanceof ObjectNode) || e == null) continue;
-            if (e.fileHash != null) keep.add(n.id() + "-" + e.fileHash + ProjectLayout.SCHEMATIC_EXT);
-            if (e.wantedHash != null) keep.add(n.id() + "-" + e.wantedHash + ProjectLayout.SCHEMATIC_EXT);
+        for (FileEntry e : files.values()) {
+            if (e.file != null) keep.add(e.file.getFileName().toString());
+            keep.add(e.objectId + "-" + e.plan.hash() + ProjectLayout.SCHEMATIC_EXT);
         }
+        for (SlotState st : slots.values()) if (st.shown != null) keep.add(st.shown.getFileName().toString());
         List<Path> stale = new ArrayList<>();
         try (Stream<Path> s = Files.list(derived)) {
             s.filter(Files::isRegularFile).filter(f -> !keep.contains(f.getFileName().toString())).forEach(stale::add);
@@ -335,13 +377,17 @@ public final class DerivedFiles implements DerivedPort {
             return core.fileOf(scene, o, base);
         }
 
+        private final Map<Path, Long> mtimes = new HashMap<>();
+
         @Override
         public long mtime(Path file) {
-            try {
-                return Files.getLastModifiedTime(file).toMillis();
-            } catch (IOException e) {
-                return 0;
-            }
+            return mtimes.computeIfAbsent(file, f -> {
+                try {
+                    return Files.getLastModifiedTime(f).toMillis();
+                } catch (IOException e) {
+                    return 0L;
+                }
+            });
         }
 
         @Override
