@@ -3,29 +3,94 @@ package dev.schemarray.editor;
 import dev.cg.uihost.UiHost;
 import dev.cg.uihost.UiLayer;
 import dev.schemarray.editor.cam.EditorCamera;
+import dev.schemarray.editor.mc.Picking;
+import dev.schemarray.editor.view.ContextMenus;
 import dev.schemarray.editor.view.EditorChrome;
+import dev.schemarray.editor.view.PropertiesWindow;
+import dev.schemarray.editor.view.SceneWindow;
+import dev.schemarray.editor.view.Toasts;
+import dev.schemarray.editor.world.WorldOverlay;
+import imgui.ImGui;
+import imgui.flag.ImGuiDockNodeFlags;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.glfw.GLFW;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * The editor's cg-uihost layer: draws the editor chrome and routes input while editor mode is on.
+ * The editor's cg-uihost layer: draws the editor UI and routes input while editor mode is on.
  * <ul>
+ *   <li>Drawing: a dock space over the main viewport with a transparent, pass-through central node (the game shows
+ *       through and the mouse there belongs to the viewport), the Scene and Properties windows, the toolbar and
+ *       status bar, context menus, toasts and the name tags of the selection.</li>
  *   <li>Mouse: always ours (so a click can never re-grab the mouse or attack), except while a screen such as chat
  *       is open and the pointer is not over an ImGui window. Presses that land on an ImGui window belong to
- *       ImGui; presses on the viewport drive the {@link EditorCamera}.</li>
- *   <li>Keyboard: everything is blocked from vanilla (movement, attack/use, hotbar, Esc) except F1 to F12, the
- *       editor toggle, chat and command, so chat and the debug keys keep working. While a screen is open it gets
- *       every key.</li>
+ *       ImGui; presses on the viewport drive picking and the {@link EditorCamera}.</li>
+ *   <li>Keyboard: everything is blocked from vanilla except F1 to F12, the editor toggle, chat and command. Keys
+ *       not typed into a text field run the editor shortcuts of {@link EditorSession#onKey}.</li>
  * </ul>
  */
 public final class EditorInputLayer implements UiLayer {
+    private static final Logger LOG = LoggerFactory.getLogger("schemarray-editor");
+
+    private int frame;
+    private boolean uiFailed;
+
     @Override public String id() { return "schemarray.editor"; }
     @Override public int order() { return 100; }
     @Override public boolean visible() { return EditorMode.isActive(); }
 
     @Override
     public void draw() {
-        EditorChrome.draw();
+        EditorSession s = null;
+        if (!uiFailed) {
+            try {
+                s = EditorSession.get();
+            } catch (Throwable t) {
+                uiFailed = true;
+                LOG.warn("[schemarray] editor UI disabled", t);
+            }
+        }
+        if (s == null) {
+            EditorChrome.draw(null);
+            return;
+        }
+        try {
+            drawUi(s);
+        } catch (RuntimeException | LinkageError e) {
+            uiFailed = true;
+            LOG.warn("[schemarray] editor UI failed", e);
+            throw e;
+        }
+    }
+
+    private void drawUi(EditorSession s) {
+        Minecraft mc = Minecraft.getInstance();
+        ImGui.dockSpaceOverViewport(0, ImGui.getMainViewport(), ImGuiDockNodeFlags.PassthruCentralNode | ImGuiDockNodeFlags.NoDockingOverCentralNode);
+
+        if (!s.windowsHidden) {
+            if (s.showScene) SceneWindow.draw(s);
+            if (s.showProperties) PropertiesWindow.draw(s);
+        }
+        s.resetLayout = false;
+        EditorChrome.draw(s);
+
+        // viewport right click: a short RMB press opens the menu for what is under the pointer
+        EditorCamera cam = EditorCamera.get();
+        if (cam.consumeRightClick() && mc.screen == null) {
+            boolean hit = Picking.onRightClick(mc, cam.rightClickX(), cam.rightClickY());
+            ContextMenus.openForSelection(s, !hit);
+        }
+        if (s.addMenuRequest) {
+            s.addMenuRequest = false;
+            ContextMenus.openAdd(s);
+        }
+        ContextMenus.draw(s);
+
+        if ((++frame & 1) == 0) Picking.updateHover(mc, UiHost.imguiWantsMouse());
+        WorldOverlay.drawTags();
+        Toasts.draw(s);
+        s.popupOpen = ImGui.isPopupOpen("", imgui.flag.ImGuiPopupFlags.AnyPopupId | imgui.flag.ImGuiPopupFlags.AnyPopupLevel);
     }
 
     // ------------------------------------------------------------------ keyboard
@@ -42,10 +107,21 @@ public final class EditorInputLayer implements UiLayer {
     public void onKey(int key, int scancode, int action, int mods) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.screen != null || mc.player == null || action != GLFW.GLFW_PRESS) return;
-        if (UiHost.imguiWantsKeyboard()) return;                          // typing in a field, or menu navigation
-        if (key == GLFW.GLFW_KEY_F || key == GLFW.GLFW_KEY_KP_DECIMAL) {
-            EditorCamera.get().frame(mc.player.getBoundingBox());         // WP 1.x: the selection; for now the player
+        if (UiHost.imguiWantsTextInput()) return;                         // typing in a field: no shortcut fires
+        if (EditorCamera.get().isFlying()) return;                        // fly keys only
+        if (EditorMode.passesToVanilla(mc, key, scancode, mods)) return;  // F-keys, chat, the toggle
+        EditorSession s = null;
+        try {
+            s = EditorSession.get();
+        } catch (Throwable ignored) {
+            // no session: no shortcuts
         }
+        if (s == null) {
+            if (key == GLFW.GLFW_KEY_F || key == GLFW.GLFW_KEY_KP_DECIMAL) EditorCamera.get().frame(mc.player.getBoundingBox());
+            return;
+        }
+        if (s.popupOpen) return;                                          // menus own arrows, Enter and Esc
+        s.onKey(key, mods);
     }
 
     // ------------------------------------------------------------------ mouse
@@ -60,7 +136,15 @@ public final class EditorInputLayer implements UiLayer {
     public void onMouseButton(int button, int action, int mods) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.screen != null && action == GLFW.GLFW_PRESS) return;
-        EditorCamera.get().onMouseButton(mc, button, action, UiHost.imguiWantsMouse());
+        boolean overUi = UiHost.imguiWantsMouse();
+        if (button == GLFW.GLFW_MOUSE_BUTTON_LEFT) {
+            if (action == GLFW.GLFW_PRESS) {
+                if (!overUi && !EditorCamera.get().isNavigating()) Picking.onLeftPress(mc);
+            } else if (action == GLFW.GLFW_RELEASE) {
+                Picking.onLeftRelease(mc, mods);
+            }
+        }
+        EditorCamera.get().onMouseButton(mc, button, action, overUi);
     }
 
     @Override

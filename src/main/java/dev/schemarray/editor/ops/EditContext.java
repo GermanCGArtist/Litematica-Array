@@ -23,6 +23,7 @@ public final class EditContext {
     private Function<String, Collection<String>> links = p -> List.of();
     private String looseDir = "";
     private String looseWorld;
+    private java.nio.file.Path portRoot;
 
     public EditContext(Scene scene, FileSystemPort fs, ChangeSink sink) {
         this.scene = Objects.requireNonNull(scene);
@@ -80,11 +81,31 @@ public final class EditContext {
     /** The port folder this node's files are relative to: its project folder, or the Loose folder. */
     public String baseDir(Node n) {
         ProjectNode p = scene.projectOf(n);
-        return p != null ? p.path() : looseDir;
+        return p != null ? portPath(p.path()) : looseDir;
     }
 
     /** The port path of a file given relative to this node's project. */
     public String path(Node n, String relative) {
         return FileSystemPort.join(baseDir(n), relative);
+    }
+
+    /**
+     * The folder the file port is rooted at. When set, a project path that is absolute (the project manager keeps
+     * absolute paths) is turned into a path relative to it for the port.
+     */
+    public EditContext setPortRoot(java.nio.file.Path root) {
+        this.portRoot = root == null ? null : root.toAbsolutePath().normalize();
+        return this;
+    }
+
+    private String portPath(String projectPath) {
+        if (portRoot == null || projectPath.isEmpty()) return projectPath;
+        try {
+            java.nio.file.Path abs = java.nio.file.Path.of(projectPath);
+            if (!abs.isAbsolute()) return projectPath;
+            return portRoot.relativize(abs.normalize()).toString().replace(java.io.File.separatorChar, '/');
+        } catch (RuntimeException e) {
+            return projectPath;
+        }
     }
 }
