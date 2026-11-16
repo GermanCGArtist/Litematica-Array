@@ -64,6 +64,8 @@ public final class Folders {
         public final boolean open;
         public final boolean hidden;
         public final int color;
+        /** A runtime folder that mirrors the editor's tree (a project, folder or assembly); see {@link #isEditorFolder}. */
+        public final boolean editor;
 
         Node(String id, Folder f, int depth, int count) {
             this.id = id;
@@ -73,6 +75,7 @@ public final class Folders {
             this.open = f.open;
             this.hidden = f.hidden;
             this.color = f.color;
+            this.editor = isEditorFolder(id);
         }
     }
 
@@ -137,11 +140,13 @@ public final class Folders {
 
     /** The folder's parent, or null if it is top level (or the parent no longer exists). */
     private static String parentId(Folder f) {
-        return f.parent != null && data().folders.containsKey(f.parent) ? f.parent : null;
+        return f.parent != null && folder(f.parent) != null ? f.parent : null;
     }
 
     /** Where the item with this id sits: its folder id, null = top level. */
     public static String folderOf(String itemId) {
+        String ed = editorFolderOf(itemId);
+        if (ed != null) return ed;
         String id = data().placements.get(itemId);
         return id != null && data().folders.containsKey(id) ? id : null;
     }
@@ -157,6 +162,7 @@ public final class Folders {
      * only the contents of open folders. Also fills the depth the item rows are indented with.
      */
     public static List<Object> rows(Collection<?> items) {
+        refreshEditor();
         DEPTH.clear();
         Map<String, List<Object>> byFolder = new LinkedHashMap<>();
         for (Object p : items) byFolder.computeIfAbsent(folderOf(p), k -> new ArrayList<>()).add(p);
@@ -168,7 +174,7 @@ public final class Folders {
     private static void addLevel(String folder, int depth, Map<String, List<Object>> byFolder, List<Object> out, Set<String> seen) {
         for (String id : childFolders(folder)) {
             if (!seen.add(id)) continue;
-            Folder f = data().folders.get(id);
+            Folder f = folder(id);
             out.add(new Node(id, f, depth, count(id, byFolder, new HashSet<>())));
             if (f.open) addLevel(id, depth + 1, byFolder, out, seen);
         }
@@ -188,15 +194,20 @@ public final class Folders {
     }
 
     private static List<String> childFolders(String parent) {
+        return childFolders(parent, true);
+    }
+
+    private static List<String> childFolders(String parent, boolean withEditor) {
         List<String> ids = new ArrayList<>();
         for (var e : data().folders.entrySet()) if (Objects.equals(parentId(e.getValue()), parent)) ids.add(e.getKey());
-        ids.sort(Comparator.comparing(id -> data().folders.get(id).name.toLowerCase()));
+        if (withEditor) for (var e : editorFolders.entrySet()) if (Objects.equals(parentId(e.getValue()), parent)) ids.add(e.getKey());
+        ids.sort(Comparator.comparing(id -> folder(id).name.toLowerCase()));
         return ids;
     }
 
     /** The name of the folder, or null if it does not exist. */
     public static String folderName(String id) {
-        Folder f = id == null ? null : data().folders.get(id);
+        Folder f = folder(id);
         return f == null ? null : f.name;
     }
 
@@ -217,7 +228,7 @@ public final class Folders {
         out.addAll(own);
     }
 
-    /** Every folder as a tree, open or not (for the Move screen). */
+    /** Every 1.x folder as a tree, open or not (for the Move screen; editor folders are not targets). */
     public static List<Node> tree() {
         List<Node> out = new ArrayList<>();
         addTree(null, 0, out, new HashSet<>());
@@ -225,7 +236,7 @@ public final class Folders {
     }
 
     private static void addTree(String parent, int depth, List<Node> out, Set<String> seen) {
-        for (String id : childFolders(parent)) {
+        for (String id : childFolders(parent, false)) {
             if (!seen.add(id)) continue;
             out.add(new Node(id, data().folders.get(id), depth, 0));
             addTree(id, depth + 1, out, seen);
@@ -256,6 +267,12 @@ public final class Folders {
     }
 
     public static void toggleOpen(String id) {
+        if (isEditorFolder(id)) {
+            if (!editorClosed.remove(id)) editorClosed.add(id);
+            Folder f = editorFolders.get(id);
+            if (f != null) f.open = !editorClosed.contains(id);
+            return;
+        }
         Folder f = data().folders.get(id);
         if (f == null) return;
         f.open = !f.open;
@@ -286,10 +303,97 @@ public final class Folders {
     /** Puts the item into the folder (null = top level). Array copies are never put in a folder. */
     public static void move(Object p, String folder) {
         String id = idOf(p);
-        if (id == null || isCopy(p)) return;
+        if (id == null || isCopy(p) || editorFolderOf(id) != null) return;
         if (folder == null || !data().folders.containsKey(folder)) data().placements.remove(id);
         else data().placements.put(id, folder);
         save();
+    }
+
+    // ------------------------------------------------------------------ editor projects (2.0)
+
+    /** Ids of the runtime folders that mirror the editor's tree start with this. */
+    public static final String EDITOR_PREFIX = "editor:";
+
+    /** The editor's projects, folders and assemblies as folders (rebuilt with every list build, never saved). */
+    private static Map<String, Folder> editorFolders = Map.of();
+    /** Placement hash id to the editor folder it sits in (from the reconciler's last pass). */
+    private static Map<String, String> editorItems = Map.of();
+    /** Editor folders the player closed in the list (runtime only). */
+    private static final Set<String> editorClosed = new HashSet<>();
+
+    public static boolean isEditorFolder(String id) {
+        return id != null && id.startsWith(EDITOR_PREFIX);
+    }
+
+    private static Folder folder(String id) {
+        if (id == null) return null;
+        return isEditorFolder(id) ? editorFolders.get(id) : data().folders.get(id);
+    }
+
+    /**
+     * The editor folder a placement sits in: placements of objects in a project mirror the editor's tree; Loose keeps
+     * the 1.x folders. Null when the placement is not in a project.
+     */
+    private static String editorFolderOf(String itemId) {
+        String f = editorItems.get(itemId);
+        if (f != null) return f;
+        dev.schemarray.editor.core.ObjectNode o = dev.schemarray.editor.mc.Reconciler.ownerOfBase(itemId);
+        if (o == null) return null;
+        String c = containerId(o.parent());
+        return c != null && editorFolders.containsKey(c) ? c : null;
+    }
+
+    /** The id of the nearest project, folder or assembly at or above {@code n}, or null (Loose or nothing). */
+    private static String containerId(dev.schemarray.editor.core.Node n) {
+        for (var x = n; x != null; x = x.parent()) {
+            if (x instanceof dev.schemarray.editor.core.LooseNode) return null;
+            if (x instanceof dev.schemarray.editor.core.ProjectNode || x instanceof dev.schemarray.editor.core.FolderNode
+                    || x instanceof dev.schemarray.editor.core.AssemblyNode) {
+                return EDITOR_PREFIX + x.id();
+            }
+        }
+        return null;
+    }
+
+    private static void refreshEditor() {
+        dev.schemarray.editor.core.Scene scene = dev.schemarray.editor.mc.Reconciler.sceneIfActive();
+        if (scene == null) {
+            editorFolders = Map.of();
+            editorItems = Map.of();
+            return;
+        }
+        Map<String, Folder> folders = new LinkedHashMap<>();
+        for (dev.schemarray.editor.core.ProjectNode p : scene.projects()) addEditorFolder(p, null, folders);
+        editorFolders = folders;
+        Map<String, String> items = new java.util.HashMap<>();
+        var core = dev.schemarray.editor.mc.Reconciler.core();
+        if (core != null) {
+            for (var c : core.cellRefs()) {
+                String pid = c.placementId();
+                if (pid == null || c.project() == null) continue;
+                // an object of the scene sits in its own folder; a part of a linked assembly in the assembly instance
+                boolean inScene = scene.byId(c.object().id()) == c.object();
+                String fid = containerId(inScene ? c.object().parent() : c.owner());
+                if (fid != null && folders.containsKey(fid)) items.putIfAbsent(pid, fid);
+            }
+        }
+        editorItems = items;
+    }
+
+    private static void addEditorFolder(dev.schemarray.editor.core.Node n, String parent, Map<String, Folder> out) {
+        String id = EDITOR_PREFIX + n.id();
+        Folder f = new Folder();
+        f.name = n.name();
+        f.parent = parent;
+        f.open = !editorClosed.contains(id);
+        f.hidden = n.hidden();
+        out.put(id, f);
+        if (n instanceof dev.schemarray.editor.core.AssemblyNode a && a.isLinked()) return;   // its parts are not scene nodes
+        for (var c : n.children()) {
+            if (c instanceof dev.schemarray.editor.core.FolderNode || c instanceof dev.schemarray.editor.core.AssemblyNode) {
+                addEditorFolder(c, id, out);
+            }
+        }
     }
 
     /** Minecraft's 16 chat colors (§0-§f) as RGB; a color is an index into this, -1 = none. */
@@ -333,7 +437,7 @@ public final class Folders {
         Set<String> seen = new HashSet<>();
         String folder = folderOf(id);
         while (folder != null && seen.add(folder)) {
-            Folder f = data().folders.get(folder);
+            Folder f = folder(folder);
             if (f == null) return -1;
             if (f.color >= 0 && f.color < COLORS.length) return f.color;
             folder = parentId(f);
@@ -346,7 +450,7 @@ public final class Folders {
         Set<String> seen = new HashSet<>();
         while (folder != null && seen.add(folder)) {
             if (folder.equals(ancestor)) return true;
-            Folder f = data().folders.get(folder);
+            Folder f = folder(folder);
             if (f == null) return false;
             folder = parentId(f);
         }
@@ -355,6 +459,7 @@ public final class Folders {
 
     /** Moves the folder (with everything in it) into the parent (null = top level); false if that would put it into itself. */
     public static boolean moveFolder(String id, String parent) {
+        if (isEditorFolder(id) || isEditorFolder(parent)) return false;
         Folder f = data().folders.get(id);
         if (f == null) return false;
         if (parent != null && (!data().folders.containsKey(parent) || isInside(parent, id))) return false;
@@ -366,10 +471,11 @@ public final class Folders {
 
     /** Puts all the items into the folder (null = top level), opens that folder and saves once. */
     public static void moveAll(Collection<?> items, String folder) {
+        if (isEditorFolder(folder)) return;   // the editor decides what is in its folders
         boolean top = folder == null || !data().folders.containsKey(folder);
         for (Object p : items) {
             String id = idOf(p);
-            if (id == null || isCopy(p)) continue;
+            if (id == null || isCopy(p) || editorFolderOf(id) != null) continue;
             if (top) data().placements.remove(id);
             else data().placements.put(id, folder);
         }
@@ -379,7 +485,8 @@ public final class Folders {
 
     private static boolean hidden(String folder) {
         Set<String> seen = new HashSet<>();
-        while (folder != null && seen.add(folder)) {
+        // an editor folder never hides by switching rendering: the editor removes the placements of hidden nodes itself
+        while (folder != null && !isEditorFolder(folder) && seen.add(folder)) {
             Folder f = data().folders.get(folder);
             if (f == null) return false;
             if (f.hidden) return true;

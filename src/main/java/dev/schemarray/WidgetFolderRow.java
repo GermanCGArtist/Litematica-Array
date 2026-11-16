@@ -27,6 +27,7 @@ public final class WidgetFolderRow extends WidgetListEntryBase<Folders.Node> {
         super(x, y, width, height, node, listIndex);
         this.isOdd = isOdd;
         int bx = x + width - 2, by = y + 1;
+        if (node.editor) return;   // mirrors the editor's tree: change it in the editor (F6)
         List<SchematicArrayApi.FolderAction> actions = SchematicArrayApi.folderActions();
 
         ButtonGeneric del = new ButtonGeneric(bx, by, -1, true, "Delete");
@@ -94,7 +95,12 @@ public final class WidgetFolderRow extends WidgetListEntryBase<Folders.Node> {
         int tx = x + 4;
         drawString(ctx, tx, y + 7, 0xFFFFFFFF, entry.open ? "v" : ">");
         Icons.FILE_ICON_DIR.renderAt(ctx, tx + 10, y + 5, zLevel, false, false);
-        drawString(ctx, tx + 28, y + 7, colored ? 0xFF000000 | rgb : entry.hidden ? 0xFF909090 : 0xFFFFFFFF, entry.name + " (" + entry.count + ")");
+        String label = entry.name + " (" + entry.count + ")";
+        drawString(ctx, tx + 28, y + 7, colored ? 0xFF000000 | rgb : entry.hidden ? 0xFF909090 : 0xFFFFFFFF, label);
+        if (entry.editor) {
+            String note = entry.hidden ? "hidden in the editor" : "editor";
+            drawString(ctx, x + width - 6 - getStringWidth(note), y + 7, 0xFF808080, note);
+        }
         super.render(ctx, mouseX, mouseY, selected);
     }
 }

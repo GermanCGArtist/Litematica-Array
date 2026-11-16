@@ -103,6 +103,11 @@ public final class Reconciler {
         return pm;
     }
 
+    /** The editor's scene while the reconciler runs, else null. Does not start anything (unlike {@link #projects()}). */
+    public static dev.schemarray.editor.core.Scene sceneIfActive() {
+        return active() && pm != null ? pm.scene() : null;
+    }
+
     /** Whom to tell about placements moved outside the editor (the undo stack). */
     public static void setDriftListener(DriftListener l) {
         init();
