@@ -300,7 +300,14 @@ private static boolean hasArray(Node n) {        List<dev.schemarray.editor.core
     /** Executes a command, shows a refusal as a toast. Returns true when it ran. */
     public boolean execute(Command c) {
         UndoStack s = stack.get();
-        Optional<Refusal> r = s.execute(c);
+        Optional<Refusal> r;
+        try {
+            r = s.execute(c);
+        } catch (RuntimeException e) {
+            // the command rolled itself back; an exception here would escape mid-frame and break the ImGui stack
+            failed(e);
+            return false;
+        }
         if (r.isPresent()) {
             host.toast(ToastQueue.Level.WARN, r.get().reason(), null, null);
             return false;
@@ -313,7 +320,14 @@ private static boolean hasArray(Node n) {        List<dev.schemarray.editor.core
         UndoStack s = stack.get();
         s.begin(label);
         for (Command c : commands) {
-            Optional<Refusal> r = s.execute(c);
+            Optional<Refusal> r;
+            try {
+                r = s.execute(c);
+            } catch (RuntimeException e) {
+                s.rollback();
+                failed(e);
+                return false;
+            }
             if (r.isPresent()) {
                 s.rollback();
                 host.toast(ToastQueue.Level.WARN, r.get().reason(), null, null);
@@ -322,6 +336,12 @@ private static boolean hasArray(Node n) {        List<dev.schemarray.editor.core
         }
         s.commit();
         return true;
+    }
+
+    private void failed(RuntimeException e) {
+        org.slf4j.LoggerFactory.getLogger("schemarray").error("Editor command failed", e);
+        String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        host.toast(ToastQueue.Level.ERROR, "That did not work: " + msg, null, null);
     }
 
     /** Runs one entry or shortcut action. Returns true when something happened. */

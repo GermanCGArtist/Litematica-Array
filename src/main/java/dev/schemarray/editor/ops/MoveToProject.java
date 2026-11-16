@@ -58,7 +58,8 @@ public final class MoveToProject extends BaseCommand {
         ProjectNode project = ctx.scene().projectOf(target);
         List<Node> nodes = Nodes.topMost(Nodes.resolve(ctx.scene(), ids).nodes());
         setLabel("Move " + Nodes.names(nodes) + " to " + project.name());
-        FileTransfer.run(ctx, journal(), nodes, project.path(), this::remember);
+        // the port path (relative to the schematics folder): the project manager keeps project paths absolute
+        FileTransfer.run(ctx, journal(), nodes, ctx.baseDir(project), this::remember);
         Nodes.reattach(ctx.scene(), nodes, target, index, this::remember);
     }
 }

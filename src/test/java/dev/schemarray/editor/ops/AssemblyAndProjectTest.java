@@ -258,6 +258,20 @@ class AssemblyAndProjectTest {
     }
 
     @Test
+    void moveToAProjectWithAnAbsolutePathUsesThePortPath() {
+        // the project manager keeps absolute project paths; the file port only takes paths below its root
+        java.nio.file.Path root = java.nio.file.Path.of("schem-root").toAbsolutePath().normalize();
+        fx.ctx.setPortRoot(root);
+        ProjectNode other = fx.project("Other", "w");
+        other.setPath(root.resolve("Projects").resolve("Other").toString());
+        fx.roundTrip(new MoveToProject(Fx.ids(a), other.id(), -1));
+        assertSame(other, a.parent());
+        assertEquals("files/a.litematic", a.file());
+        assertTrue(fx.fs.exists("Projects/Other/files/a.litematic"));
+        assertFalse(fx.fs.exists("Projects/Metro/files/a.litematic"));
+    }
+
+    @Test
     void moveToAnotherProjectCopiesAFileThatIsStillUsed() {
         ProjectNode other = fx.project("Other", "w");
         ObjectNode sharer = new ObjectNode("a again", a.file());
