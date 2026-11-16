@@ -129,8 +129,8 @@ public final class EditorExports {
     // ------------------------------------------------------------------------------------------ litematic
 
     /**
-     * Export as .litematic for one object: its file, copied. TODO(M5): the derived variant, with the Boolean cuts and
-     * the front-order trims applied, once derived files exist.
+     * Export as .litematic for one object: its file, copied; for an object with trims or Booleans the derived file
+     * (cuts and front-order trims applied).
      */
     public void exportLitematic(ObjectNode o) {
         Path src = s.fileOf(o);
@@ -142,6 +142,24 @@ public final class EditorExports {
         String file = src.getFileName().toString();
         if (!base.isBlank() && !file.toLowerCase().startsWith(base.toLowerCase())) file = base + ProjectLayout.SCHEMATIC_EXT;
         Path out = dir().resolve(ZipExport.uniqueName(dir(), stripExt(file), ProjectLayout.SCHEMATIC_EXT));
+        // a trimmed or cut object exports its derived variant (what Litematica shows), built first when needed
+        var plan = s.planOf(o, dev.schemarray.editor.core.MaskPlan.Filter.ALL);
+        var proj = s.scene().projectOf(o);
+        if (!plan.isEmpty() && proj != null) {
+            s.toast(ToastQueue.Level.INFO, "Building the trimmed file for \"" + o.name() + "\"…");
+            dev.schemarray.editor.mc.DerivedFiles.shared().build(plan, src, s.projectDir(proj), b -> {
+                if (!b.ok() || b.file() == null) {
+                    s.toast(ToastQueue.Level.ERROR, "Export failed: " + (b.error() == null ? "no file" : b.error()));
+                    return;
+                }
+                async(() -> {
+                    Files.createDirectories(out.getParent());
+                    Files.copy(b.file(), out);
+                    return "Exported to " + shown(out) + " (with trims and Booleans applied)";
+                }, ToastQueue.Level.INFO);
+            });
+            return;
+        }
         async(() -> {
             Files.createDirectories(out.getParent());
             Files.copy(src, out);
@@ -165,9 +183,19 @@ public final class EditorExports {
         String file = ZipExport.uniqueName(dir(), name == null || name.isBlank() ? "Bake" : name, ProjectLayout.SCHEMATIC_EXT);
         String stem = stripExt(file);
         Path out = dir();
+        // parts whose base cell has a ready derived file bake that one (trims and Booleans applied); read here on the client thread
+        java.util.Map<java.util.UUID, Path> derivedOf = new java.util.HashMap<>();
+        for (BakeParts.Part p : parts) {
+            if (p.base() != null || !p.cell().isEmpty()) continue;
+            Path d = dev.schemarray.editor.mc.DerivedFiles.shared().readyFile(p.object().id());
+            if (d != null) derivedOf.put(p.object().id(), d);
+        }
         async(() -> {
             Files.createDirectories(out);
-            Bake.Result r = Bake.bake(parts, p -> s.fileOf(p.object(), p.base()), out, stem, Compat.playerName());
+            Bake.Result r = Bake.bake(parts, p -> {
+                Path d = p.base() == null && p.cell().isEmpty() ? derivedOf.get(p.object().id()) : null;
+                return d != null ? d : s.fileOf(p.object(), p.base());
+            }, out, stem, Compat.playerName());
             if (!r.ok()) throw new IOException(r.error());
             return "Baked " + r.regions() + " sub-regions, " + r.blocks() + " blocks to " + shown(r.file())
                     + (r.skippedParts() > 0 ? " (" + r.skippedParts() + " parts skipped: file missing)" : "");

@@ -90,6 +90,9 @@ public final class Reconciler {
         LitematicaAdapter adapter = LitematicaAdapter.shared();
         core = new ReconcileCore(adapter, SchematicInfo.shared(), new LasmCache(), DataManager.getSchematicsBaseDirectory().toAbsolutePath().normalize());
         pm.setCloseHook(core::release);
+        core.setDerived(DerivedFiles.shared());
+        DerivedFiles.shared().bind(core);
+        pm.setSaveHook(DerivedFiles.shared()::cleanup);
     }
 
     /** The open projects and Loose of the world the player is in (empty before the world is entered). */
@@ -145,6 +148,7 @@ public final class Reconciler {
         }
         pm.setDimension(dim);
         try {
+            DerivedFiles.shared().tick(pm.scene(), world, dim, tick);
             core.reconcile(pm.scene(), world, dim, tick);
             pm.tick();
             publishOwners();
@@ -164,6 +168,7 @@ public final class Reconciler {
             System.out.println("[SchematicArray] cannot save the projects: " + t);
         }
         if (core != null) core.reset();
+        DerivedFiles.shared().reset();
         ready = false;
         failed = false;
         lastLevel = null;

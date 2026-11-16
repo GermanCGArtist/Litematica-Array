@@ -391,8 +391,22 @@ public final class EditorChrome {
             String shown = ImGui.calcTextSizeX(summary) > sumW ? Ui.fitEnd(summary, sumW) : summary;
             dl.addText(x0 + w - 10 * sc - ImGui.calcTextSizeX(shown), y0 + (h - fh) * 0.5f, Theme.u32(Theme.FG), shown);
 
-            List<Hint> hints = hintsFor(s);
             float limit = x0 + w - 10 * sc - sumW - 14 * sc;
+            var derived = dev.schemarray.editor.mc.DerivedFiles.shared();
+            int work = derived.working(), bad = derived.failed();
+            if (work > 0 || bad > 0) {
+                String dt = bad > 0 ? bad + " derived file" + (bad == 1 ? "" : "s") + " failed (Retry in the Boolean card)"
+                        : "Rebuilding " + work + " derived file" + (work == 1 ? "" : "s") + "…";
+                float tw = ImGui.calcTextSizeX(dt);
+                float dx = limit - tw - 14 * sc;
+                int col = bad > 0 ? Theme.ERR : Theme.WARN;
+                if (dx > x0 + 220 * sc) {
+                    dl.addCircleFilled(dx + 3.5f * sc, y0 + h * 0.5f, 3.5f * sc, Theme.u32(col));
+                    dl.addText(dx + 11 * sc, y0 + (h - fh) * 0.5f, Theme.u32(col), dt);
+                    limit = dx - 10 * sc;
+                }
+            }
+            List<Hint> hints = hintsFor(s);
             float x = x0 + 10 * sc;
             for (Hint hint : hints) {
                 float need = hintWidth(hint, sc);
@@ -415,6 +429,7 @@ public final class EditorChrome {
     private static final List<Hint> HINTS_BOX = List.of(Hint.of("select", "drag"), Hint.of("add", "Shift"), Hint.of("subtract", "Ctrl"), Hint.of("cancel", "Esc"));
 
     private static List<Hint> hintsFor(EditorSession s) {
+        if (s != null && s.eyedropping()) return List.of(Hint.of("pick the cutter", "click"), Hint.of("cancel", "Esc"));
         if (EditorCamera.get().isFlying()) return HINTS_FLY;
         if (SceneWindow.isRenaming()) return HINTS_RENAME;
         if (SceneWindow.isDragging()) return HINTS_TREE_DRAG;

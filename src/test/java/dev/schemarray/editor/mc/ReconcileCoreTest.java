@@ -820,4 +820,41 @@ class ReconcileCoreTest {
         run();
         assertEquals(0, port.placements.size());
     }
+
+    // ------------------------------------------------------------------------------------------ derived files, wire cutters
+
+    @Test
+    void theBaseCellSwitchesToTheDerivedFileAndArrayCellsKeepTheOriginal() {
+        ObjectNode o = obj("a");
+        o.mods().add(array(2, 1));
+        proj.addChild(o);
+        run();
+        String baseId = o.placementIds().get(ObjectNode.BASE_CELL);
+        Path derived = dir.resolve(".cache/derived/x-1.litematic");
+        core.setDerived(ob -> derived);
+        run();
+        assertEquals(derived, port.read(o.placementIds().get(ObjectNode.BASE_CELL)).file());
+        assertEquals(baseId, o.placementIds().get(ObjectNode.BASE_CELL), "the placement id is kept");
+        assertEquals(dir.resolve("files").resolve("a.litematic"), port.read(o.placementIds().get("1")).file());
+        core.setDerived(ob -> null);   // the mask is gone: back to the original
+        run();
+        assertEquals(dir.resolve("files").resolve("a.litematic"), port.read(o.placementIds().get(ObjectNode.BASE_CELL)).file());
+    }
+
+    @Test
+    void aWireObjectKeepsItsPlacementHiddenAndShowsItAgainWhenUnwired() {
+        ObjectNode o = obj("c");
+        proj.addChild(o);
+        run();
+        String id = o.placementIds().get(ObjectNode.BASE_CELL);
+        assertTrue(port.read(id).render());
+        o.setWire(true);
+        run();
+        assertFalse(port.read(id).render());
+        run();
+        assertFalse(port.read(id).render(), "stays hidden");
+        o.setWire(false);
+        run();
+        assertTrue(port.read(id).render());
+    }
 }

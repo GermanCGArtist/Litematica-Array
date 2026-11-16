@@ -9,6 +9,7 @@ import dev.schemarray.editor.core.AssemblyNode;
 import dev.schemarray.editor.core.Box;
 import dev.schemarray.editor.core.Node;
 import dev.schemarray.editor.core.ObjectNode;
+import dev.schemarray.editor.core.Overlaps;
 import dev.schemarray.editor.mc.Picking;
 import dev.schemarray.editor.pick.ViewMath;
 import dev.schemarray.editor.pick.WorldBoxes;
@@ -62,14 +63,118 @@ public final class WorldOverlay {
         List<Line> lines = new ArrayList<>();
         collect(s, lines);
         Gizmo.Preview preview = s.gizmo.preview();
-        if (lines.isEmpty() && preview == null) return;
+        List<Box> overlaps = new ArrayList<>();
+        for (Overlaps.Overlap ov : s.allOverlaps()) if (s.lostTo(ov.loser(), ov.winner()) != 0) overlaps.add(ov.box());
+        List<Object[]> cutters = cutters(s);
+        if (lines.isEmpty() && preview == null && overlaps.isEmpty() && cutters.isEmpty()) return;
         try (var ignored = mc.levelRenderer.collectPerFrameGizmos()) {
             for (Line l : lines) {
                 var p = Gizmos.cuboid(l.box(), GizmoStyle.stroke(argb(l.rgb(), l.alpha()), l.width()));
                 if (l.xray()) p.setAlwaysOnTop();
             }
+            for (Box b : overlaps) overlapVolume(b);
+            for (Object[] c : cutters) ghostBox((Box) c[0], (Boolean) c[1] ? BOOL : Theme.GUTTER, (Boolean) c[1] ? 0.9f : 0.6f, 1.5f, 0f);
             if (preview != null) renderPreview(preview);
         }
+    }
+
+    private static final int BOOL = 0xb48cf0;
+    private static final int OVERLAP = 0xf07470;
+
+    /** The boxes of wire cutter objects, each with whether an enabled Boolean uses it. */
+    private static List<Object[]> cutters(EditorSession s) {
+        List<Object[]> out = new ArrayList<>();
+        WorldBoxes wb = s.boxes();
+        var scene = s.scene();
+        for (Node n : scene.allNodes()) {
+            if (!(n instanceof ObjectNode o) || !o.wire()) continue;
+            boolean used = false;
+            for (Node x : scene.allNodes()) {
+                List<dev.schemarray.editor.core.Modifier> mods = x instanceof ObjectNode ox ? ox.mods() : x instanceof AssemblyNode ax ? ax.mods() : List.of();
+                for (var m : mods) if (m instanceof dev.schemarray.editor.core.BooleanModifier bm && bm.enabled && o.id().equals(bm.targetId)) used = true;
+            }
+            for (Box b : wb.objectBoxes(o.id())) out.add(new Object[] {b, used});
+        }
+        return out;
+    }
+
+    /** DESIGN 11.4: translucent faces and edges with depth off, plus a 45 degree hatch on the top face. */
+    private static void overlapVolume(Box b) {
+        AABB a = aabb(b);
+        var edges = Gizmos.cuboid(a, GizmoStyle.stroke(argb(OVERLAP, 0.85f), 1.5f));
+        edges.setAlwaysOnTop();
+        int fill = argb(OVERLAP, 0.18f);
+        double[] lo = {a.minX, a.minY, a.minZ}, hi = {a.maxX, a.maxY, a.maxZ};
+        for (int axis = 0; axis < 3; axis++) {
+            int u = (axis + 1) % 3, v = (axis + 2) % 3;
+            for (int side = 0; side < 2; side++) {
+                double[][] c = new double[4][3];
+                for (int k = 0; k < 4; k++) {
+                    c[k][axis] = side == 0 ? lo[axis] : hi[axis];
+                    c[k][u] = (k == 0 || k == 3) ? lo[u] : hi[u];
+                    c[k][v] = (k < 2) ? lo[v] : hi[v];
+                }
+                Gizmos.rect(new Vec3(c[0][0], c[0][1], c[0][2]), new Vec3(c[1][0], c[1][1], c[1][2]), new Vec3(c[2][0], c[2][1], c[2][2]),
+                        new Vec3(c[3][0], c[3][1], c[3][2]), GizmoStyle.fill(fill)).setAlwaysOnTop();
+            }
+        }
+        double w = hi[0] - lo[0], d = hi[2] - lo[2];
+        double step = Math.max(1.0, Math.ceil((w + d) / 60.0));
+        for (double t = lo[0] + lo[2] + step; t < hi[0] + hi[2]; t += step) {
+            double xa = Math.max(lo[0], t - hi[2]), xb = Math.min(hi[0], t - lo[2]);
+            if (xa < xb) {
+                Gizmos.line(new Vec3(xa, hi[1], t - xa), new Vec3(xb, hi[1], t - xb), argb(OVERLAP, 0.5f), 1f).setAlwaysOnTop();
+            }
+        }
+    }
+
+    /** Labels "−N blocks from loser" at the top-face centre of overlaps whose loser or winner is hovered or selected. */
+    public static void drawOverlapLabels() {
+        EditorSession s = EditorSession.get();
+        EditorCamera cam = EditorCamera.get();
+        if (s == null || cam.isNavigating()) return;
+        List<Overlaps.Overlap> all = s.allOverlaps();
+        if (all.isEmpty()) return;
+        UUID hover = Picking.hover();
+        var scene = s.scene();
+        Minecraft mc = Minecraft.getInstance();
+        double w = Math.max(1, mc.getWindow().getScreenWidth()), h = Math.max(1, mc.getWindow().getScreenHeight());
+        ViewMath.Basis basis = ViewMath.Basis.of(cam.yaw(), cam.pitch());
+        Vec3 cp = cam.position();
+        double[] c = {cp.x, cp.y, cp.z};
+        double fov = mc.options.fov().get();
+        float sc = UiHost.scale();
+        ImDrawList dl = ImGui.getBackgroundDrawList();
+        Theme.push(UiHost.theme().monoS());
+        float fh = ImGui.getFontSize(), tagH = 18 * sc;
+        java.util.Set<String> done = new java.util.HashSet<>();
+        List<float[]> placed = new ArrayList<>();
+        for (Overlaps.Overlap ov : all) {
+            boolean hot = ov.loser().equals(hover) || ov.winner().equals(hover) || s.selection.isSelected(ov.loser()) || s.selection.isSelected(ov.winner());
+            if (!hot || !done.add(ov.loser() + ">" + ov.winner())) continue;
+            long n = s.lostTo(ov.loser(), ov.winner());
+            if (n == 0) continue;
+            Node loser = scene.byId(ov.loser());
+            if (loser == null) continue;
+            String text = n >= 0 ? String.format(java.util.Locale.ROOT, "−%,d blocks from %s", n, loser.name()) : "overlap with front object, counting…";
+            Box b = ov.box();
+            double[] p = ViewMath.project(basis, c, fov, w, h, (b.min().x() + b.maxExclusive().x()) * 0.5, b.maxExclusive().y(),
+                    (b.min().z() + b.maxExclusive().z()) * 0.5);
+            if (p == null) continue;
+            float tw = ImGui.calcTextSizeX(text) + 12 * sc;
+            float x = (float) p[0] - tw * 0.5f, y = (float) p[1] - tagH * 0.5f;
+            boolean hit = true;
+            for (int tries = 0; tries <= 3 && hit; tries++) {
+                hit = false;
+                for (float[] r : placed) if (x < r[2] && x + tw > r[0] && y < r[3] && y + tagH > r[1]) hit = true;
+                if (hit) y -= tagH + 4 * sc;
+            }
+            if (hit) continue;
+            placed.add(new float[] {x, y, x + tw, y + tagH});
+            dl.addRectFilled(x, y, x + tw, y + tagH, Theme.u32(0x14161a, 0.82f), 4 * sc);
+            dl.addText(x + 6 * sc, y + (tagH - fh) * 0.5f, Theme.u32(OVERLAP), text);
+        }
+        ImGui.popFont();
     }
 
     // ------------------------------------------------------------------ the drag ghost (DESIGN 11.3) and the snap face (11.10)

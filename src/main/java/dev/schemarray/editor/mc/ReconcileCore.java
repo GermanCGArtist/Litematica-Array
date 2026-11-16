@@ -70,6 +70,10 @@ public final class ReconcileCore {
     private int budget = BUDGET;
     /** Local view (runtime only, never saved): the owners that stay visible; null = everything. */
     private Set<UUID> localOnly;
+    /** Derived files (trims and Booleans): which file the base cell of an object uses right now. */
+    private DerivedPort derived = ob -> null;
+    /** Base placements this class hid because their object is a wire cutter (so un-wiring shows them again). */
+    private final Set<String> wireHidden = new HashSet<>();
 
     /** Base placement id to the transform this class last wrote or saw. */
     private final Map<String, Transform> lastSeen = new HashMap<>();
@@ -98,6 +102,25 @@ public final class ReconcileCore {
      */
     public void setLocalView(Set<UUID> owners) {
         localOnly = owners == null ? null : Set.copyOf(owners);
+    }
+
+    public void setDerived(DerivedPort d) {
+        this.derived = d == null ? ob -> null : d;
+    }
+
+    /** Sizes and linked parts with this reconciler's rules (for planning masks). */
+    public AssemblyBounds.Env boundsEnv(Scene scene) {
+        return new CoreEnv(scene);
+    }
+
+    /** The absolute file of an object, whose files are relative to {@code base} (null: the model's rule), or null. */
+    public Path fileOf(Scene scene, ObjectNode o, Path base) {
+        return base != null ? inside(base, o.file()) : resolve(scene.projectOf(o), o.file());
+    }
+
+    /** The absolute folder of a project, or null for Loose. */
+    public Path projectDir(ProjectNode p) {
+        return projectBase(p);
     }
 
     public void setBudget(int budget) {
@@ -404,7 +427,12 @@ public final class ReconcileCore {
         }
 
         boolean enabled = bs == null || bs.enabled();
-        boolean render = bs != null ? bs.render() : !ob.wire();
+        boolean render = !ob.wire() && (bs == null || bs.render() || (baseId != null && wireHidden.contains(baseId)));
+        Path baseFile = file;
+        if (!linked && base == null && proj != null) {
+            Path d = derived.fileFor(ob);
+            if (d != null) baseFile = d;
+        }
         for (var e : want.entrySet()) {
             String key = e.getKey();
             Transform t = e.getValue();
@@ -412,7 +440,8 @@ public final class ReconcileCore {
             String id = ids.get(key);
             if (id != null && !r.claimed.add(id)) id = null;   // another node already owns this placement
             PlacementState st = id == null || !r.existing.contains(id) ? null : isBase ? bs : port.read(id);
-            boolean wrongFile = st != null && !samePath(st.file(), file);
+            Path cellFile = isBase ? baseFile : file;
+            boolean wrongFile = st != null && !samePath(st.file(), cellFile);
             if (st == null || wrongFile) {
                 if (r.created >= budget) {
                     r.deferred++;
@@ -423,7 +452,7 @@ public final class ReconcileCore {
                     r.existing.remove(id);
                     lastSeen.remove(id);
                 }
-                String nid = port.create(file, t.pos(), t.rot(), t.mirror(), isBase ? ob.name() : ob.name() + " #" + key, enabled, render, id);
+                String nid = port.create(cellFile, t.pos(), t.rot(), t.mirror(), isBase ? ob.name() : ob.name() + " #" + key, enabled, render, id);
                 if (nid == null) continue;
                 ids.put(key, nid);
                 r.claimed.add(nid);
@@ -437,6 +466,19 @@ public final class ReconcileCore {
                 }
                 batch.add(nid);
                 continue;
+            }
+            if (isBase && !linked) {
+                // a wire cutter keeps its own placement hidden; un-wiring shows it again (only if this class hid it)
+                if (ob.wire() && st.render()) {
+                    port.update(id, st.origin(), st.rot(), st.mirror(), st.enabled(), false);
+                    wireHidden.add(id);
+                    PlacementState again = port.read(id);
+                    if (again != null) st = again;
+                } else if (!ob.wire() && !st.render() && wireHidden.remove(id)) {
+                    port.update(id, st.origin(), st.rot(), st.mirror(), st.enabled(), true);
+                    PlacementState again = port.read(id);
+                    if (again != null) st = again;
+                }
             }
             boolean tdiff = !st.transform().equals(t);
             boolean sdiff = !isBase && (st.enabled() != enabled || st.render() != render);

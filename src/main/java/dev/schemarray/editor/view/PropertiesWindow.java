@@ -7,6 +7,7 @@ import dev.schemarray.editor.core.ArrayCells;
 import dev.schemarray.editor.core.ArrayModifier;
 import dev.schemarray.editor.core.AssemblyNode;
 import dev.schemarray.editor.core.BooleanModifier;
+import dev.schemarray.editor.mc.DerivedFiles;
 import dev.schemarray.editor.core.Box;
 import dev.schemarray.editor.core.ExternalNode;
 import dev.schemarray.editor.core.FolderNode;
@@ -471,6 +472,12 @@ public final class PropertiesWindow {
         ImGui.popFont();
         ImGui.sameLine();
         Ui.smallDim((blocks < 0 ? "counting · " : "counted · ") + info.size().x() + "×" + info.size().y() + "×" + info.size().z());
+        DerivedFiles.Info di = DerivedFiles.shared().infoOf(o.id());
+        if (di != null && di.status() == DerivedFiles.Status.BUILDING) {
+            Ui.smallDim("Rebuilding the trimmed file…");
+        } else if (di != null && di.removed() > 0) {
+            Ui.colored(Theme.ERR, String.format(Locale.ROOT, "−%,d removed by front objects and Booleans", di.removed()));
+        }
     }
 
     private static void frontSection(EditorSession s, Node n) {
@@ -501,7 +508,9 @@ public final class PropertiesWindow {
             Node on = s.scene().byId(other);
             if (on == null) continue;
             long vol = ov.box().volume();
-            String text = (loser ? "Loses up to " : "Wins up to ") + String.format(Locale.ROOT, "%,d", vol) + " blocks " + (loser ? "to " : "over ");
+            long real = loser ? s.lostTo(n.id(), other) : s.lostTo(other, n.id());
+            String text = (loser ? "Loses " : "Wins ") + (real >= 0 ? "" : "up to ") + String.format(Locale.ROOT, "%,d", real >= 0 ? real : vol) + " blocks "
+                    + (loser ? "to " : "over ");
             ImGui.pushStyleColor(ImGuiCol.Text, Ui.c(loser ? Theme.ERR : Theme.DIM));
             ImGui.text(text);
             ImGui.popStyleColor();
@@ -545,6 +554,7 @@ public final class PropertiesWindow {
         }
         if (!any) Ui.dim("Nothing uses it as a cutter.");
         Ui.smallDim("Its own blocks are not counted, printed or pushed.");
+        if (ImGui.smallButton("Show blocks (no longer a wire cutter)##unwire")) s.actions.execute(new dev.schemarray.editor.ops.SetWire(o.id(), false));
     }
 
     // ------------------------------------------------------------------------------------------ project, folder, loose
@@ -673,10 +683,7 @@ public final class PropertiesWindow {
             if (isArray) {
                 if (ImGui.menuItem("Realise into objects")) s.actions.run("mod.realise");
             } else {
-                ImGui.beginDisabled();
-                ImGui.menuItem("Apply → new .litematic");
-                ImGui.endDisabled();
-                Ui.tooltip(MenuModel.LATER);
+                if (n instanceof ObjectNode on && ImGui.menuItem("Apply → new .litematic", "", false, !s.applying(on.id()))) s.applyBoolean(on, idx);
             }
             if (ImGui.menuItem("Move up", "", false, idx > 0)) s.actions.execute(new ModifierEdits.ReorderModifier(n.id(), idx, idx - 1));
             if (ImGui.menuItem("Move down", "", false, idx < mods.size() - 1)) s.actions.execute(new ModifierEdits.ReorderModifier(n.id(), idx, idx + 1));
@@ -841,20 +848,58 @@ public final class PropertiesWindow {
             ImGui.endCombo();
         }
         ImGui.sameLine();
-        Ui.iconButton("##eyedrop", "capture", 25 * sc, false, false, "Pick the cutter in the world. " + MenuModel.LATER);
+        boolean armed = s.eyedropping();
+        if (Ui.iconButton("##eyedrop", "capture", 25 * sc, armed, true, "Pick the cutter in the world: click an object, Esc cancels")) {
+            if (armed) s.cancelEyedrop();
+            else s.startEyedrop(n.id(), idx);
+        }
         // status
         Node t = b.targetId == null ? null : s.scene().byId(b.targetId);
+        boolean touches = true;
         if (t == null) {
             Ui.colored(Theme.WARN, "The cutter object is missing: nothing is removed.");
+            touches = false;
+        } else if (!b.enabled) {
+            Ui.smallDim("Off: the cut is not shown in the world.");
         } else {
             Box own = boxOf(s, List.of(n.id())), cut = boxOf(s, List.of(t.id()));
+            DerivedFiles.Info info = DerivedFiles.shared().infoOf(n.id());
             if (own != null && cut != null && own.intersect(cut).isEmpty()) {
                 Ui.colored(Theme.WARN, "The cutter doesn't touch this object: nothing is removed.");
+                touches = false;
+            } else if (info != null && info.status() == DerivedFiles.Status.FAILED) {
+                Ui.colored(Theme.ERR, "Rebuild failed" + (info.error() == null ? "" : ": " + info.error()));
+                if (ImGui.smallButton("Retry")) DerivedFiles.shared().retryFailed();
+            } else if (info == null || info.booleanRemoved() < 0) {
+                Ui.smallDim("Rebuilding…");
+            } else if (info.booleanRemoved() == 0) {
+                Ui.colored(Theme.WARN, "The cutter doesn't touch this object: nothing is removed.");
+                touches = false;
             } else {
-                Ui.smallDim("The cut shows once derived files are built (a later 2.0 alpha).");
+                Ui.colored(Theme.OK, String.format(Locale.ROOT, "Removes ~%,d blocks", info.booleanRemoved()));
             }
         }
-        Ui.button("Apply → new .litematic", false, false, 0, MenuModel.LATER);
+        if (t instanceof ObjectNode to && !(n instanceof AssemblyNode)) {
+            String label = to.wire() ? "Show cutter blocks" : "Draw cutter as wire";
+            if (ImGui.smallButton(label + "##wire")) s.actions.execute(new dev.schemarray.editor.ops.SetWire(to.id(), !to.wire()));
+            Ui.tooltip(to.wire() ? "The cutter's blocks are shown and counted again" : "Shows the cutter as a dotted outline only; its blocks are not placed, counted or trimmed");
+        }
+        if (n instanceof ObjectNode on) {
+            boolean busy = s.applying(on.id());
+            if (Ui.button(busy ? "Building…" : "Apply → new .litematic", true, !busy && t != null && touches && b.enabled,
+                    0, busy ? "Building the file…" : "Needs an enabled Boolean whose cutter touches this object")) {
+                s.applyBoolean(on, idx);
+            }
+            Ui.tooltip("Writes " + stem(on) + "_bool.litematic and replaces this object's file with it. Ctrl Z undoes.");
+        }
+    }
+
+    private static String stem(ObjectNode o) {
+        String f = o.file();
+        int sl = Math.max(f.lastIndexOf('/'), f.lastIndexOf('\\'));
+        if (sl >= 0) f = f.substring(sl + 1);
+        int dot = f.lastIndexOf('.');
+        return dot > 0 ? f.substring(0, dot) : f;
     }
 
     // ------------------------------------------------------------------------------------------ batch
