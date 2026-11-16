@@ -71,6 +71,7 @@ public final class SceneWindow {
     private static UUID deferredSelect;
     private static List<String> projectChoices = List.of();
     private static List<String> schematicChoices = List.of();
+    private static SchemFolder schematicTree = new SchemFolder();
     private static List<Path> lasmChoices = List.of();
     private static List<ProjectNode> linkChoices = List.of();
     private static UUID addParent;
@@ -197,6 +198,7 @@ public final class SceneWindow {
             addParent = s.addSchematicParent;
             s.addSchematicParent = null;
             schematicChoices = listSchematics(s);
+            schematicTree = SchemFolder.of(schematicChoices);
             PICK_FILTER.set("");
             ImGui.openPopup("Add schematic##modal");
         }
@@ -840,12 +842,19 @@ public final class SceneWindow {
             String f = PICK_FILTER.get().toLowerCase(Locale.ROOT);
             ImGui.beginChild("##schemlist", 400 * sc, 260 * sc, true);
             int shown = 0;
-            for (String path : schematicChoices) {
-                if (!f.isEmpty() && !path.toLowerCase(Locale.ROOT).contains(f)) continue;
-                if (++shown > 400) break;
-                if (ImGui.selectable(path + "##s" + path)) {
-                    addSchematic(s, path);
-                    ImGui.closeCurrentPopup();
+            if (f.isEmpty()) {
+                // folder tree: folders first (collapsed), then the files of each folder by name
+                if (drawSchemFolder(s, schematicTree)) ImGui.closeCurrentPopup();
+                shown = schematicChoices.size();
+            } else {
+                // filtering: a flat list of matching paths, so a match deep in a folder is found at once
+                for (String path : schematicChoices) {
+                    if (!path.toLowerCase(Locale.ROOT).contains(f)) continue;
+                    if (++shown > 400) break;
+                    if (ImGui.selectable(path + "##s" + path)) {
+                        addSchematic(s, path);
+                        ImGui.closeCurrentPopup();
+                    }
                 }
             }
             if (shown == 0) Ui.dim("No schematics found.");
@@ -969,6 +978,53 @@ public final class SceneWindow {
     }
 
     /** .litematic files below the schematics folder (not inside Projects), as paths relative to it, up to 4 levels. */
+    /** The Add schematic picker's folder tree: sub folders by name, then the schematic paths directly in it. */
+    private static final class SchemFolder {
+        final java.util.TreeMap<String, SchemFolder> dirs = new java.util.TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        final List<String> files = new ArrayList<>();
+        int total;
+
+        static SchemFolder of(List<String> paths) {
+            SchemFolder root = new SchemFolder();
+            for (String p : paths) {
+                String[] parts = p.split("/");
+                SchemFolder d = root;
+                d.total++;
+                for (int i = 0; i < parts.length - 1; i++) {
+                    d = d.dirs.computeIfAbsent(parts[i], k -> new SchemFolder());
+                    d.total++;
+                }
+                d.files.add(p);
+            }
+            return root;
+        }
+    }
+
+    /** Draws one folder level of the picker; true when a schematic was added (the caller closes the popup). */
+    private static boolean drawSchemFolder(EditorSession s, SchemFolder folder) {
+        boolean added = false;
+        for (var e : folder.dirs.entrySet()) {
+            String name = e.getKey();
+            ImGui.pushID(name);
+            boolean open = ImGui.treeNodeEx("##dir", imgui.flag.ImGuiTreeNodeFlags.SpanAvailWidth, name + "/");
+            ImGui.sameLine();
+            Ui.dim(String.valueOf(e.getValue().total));
+            if (open) {
+                added |= drawSchemFolder(s, e.getValue());
+                ImGui.treePop();
+            }
+            ImGui.popID();
+        }
+        for (String path : folder.files) {
+            String name = path.substring(path.lastIndexOf('/') + 1);
+            if (ImGui.selectable(name + "##s" + path)) {
+                addSchematic(s, path);
+                added = true;
+            }
+        }
+        return added;
+    }
+
     private static List<String> listSchematics(EditorSession s) {
         List<String> out = new ArrayList<>();
         Path root = s.schematicsDir();

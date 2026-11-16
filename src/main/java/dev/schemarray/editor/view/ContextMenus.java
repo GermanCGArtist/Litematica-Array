@@ -144,9 +144,15 @@ public final class ContextMenus {
         }
     }
 
-    /** Labels get leading space for the 14 px icon column (DESIGN 10). */
+    /**
+     * Labels get leading space for the 14 px icon column (DESIGN 10). The icon spans x+8..x+22, so the label must start
+     * at about x+30; the number of spaces is measured with the current font, since a space is only a few pixels wide.
+     */
     private static String pad(String label) {
-        return "      " + label;
+        float sc = Ui.s();
+        float space = Math.max(1f, ImGui.calcTextSizeX(" "));
+        int n = (int) Math.ceil(26 * sc / space);
+        return " ".repeat(Math.max(6, n)) + label;
     }
 
     private static void icon(Item it, float x, float y, float h) {

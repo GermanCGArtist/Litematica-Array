@@ -862,13 +862,32 @@ public final class PropertiesWindow {
         ImGui.alignTextToFramePadding();
         ImGui.text("Count");
         ImGui.sameLine(70 * sc);
-        ImGui.setNextItemWidth(ImGui.getContentRegionAvailX() - 10 * sc);
+        float btn = ImGui.getFrameHeight();
+        float gap = ImGui.getStyle().getItemInnerSpacingX();
+        ImGui.setNextItemWidth(ImGui.getContentRegionAvailX() - 10 * sc - 2 * (btn + gap));
         if (ImGui.dragInt("##count", cnt, 0.2f, 1, ArrayCells.MAX_COPIES)) {
             ArrayModifier c = a.copy();
             c.count = Math.max(1, Math.min(ArrayCells.MAX_COPIES, cnt[0]));
             s.actions.execute(new ModifierEdits.EditModifier(n.id(), idx, "count", c));
         }
         if (ImGui.isItemDeactivated()) s.undoStack().breakMerge();
+        int step = 0;
+        ImGui.sameLine(0, gap);
+        ImGui.beginDisabled(a.count <= 1);
+        if (ImGui.button("-##countdec", btn, btn)) step = -1;
+        ImGui.endDisabled();
+        Ui.tooltip("One copy less");
+        ImGui.sameLine(0, gap);
+        ImGui.beginDisabled(a.count >= ArrayCells.MAX_COPIES);
+        if (ImGui.button("+##countinc", btn, btn)) step = 1;
+        ImGui.endDisabled();
+        Ui.tooltip("One copy more");
+        if (step != 0) {
+            ArrayModifier c = a.copy();
+            c.count = Math.max(1, Math.min(ArrayCells.MAX_COPIES, a.count + step));
+            s.actions.execute(new ModifierEdits.EditModifier(n.id(), idx, "count", c));
+            s.undoStack().breakMerge();
+        }
         // mode
         ImGui.alignTextToFramePadding();
         ImGui.text("Offset");
