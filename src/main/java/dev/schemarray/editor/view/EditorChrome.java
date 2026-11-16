@@ -3,8 +3,19 @@ package dev.schemarray.editor.view;
 import dev.cg.uihost.Theme;
 import dev.cg.uihost.UiHost;
 import dev.schemarray.editor.EditorMode;
+import dev.schemarray.editor.EditorSession;
+import dev.schemarray.editor.EditorSession.Tool;
 import dev.schemarray.editor.cam.EditorCamera;
 import dev.schemarray.editor.cam.SpectatorFollow;
+import dev.schemarray.editor.core.ArrayCells;
+import dev.schemarray.editor.core.ArrayModifier;
+import dev.schemarray.editor.core.AssemblyNode;
+import dev.schemarray.editor.core.Box;
+import dev.schemarray.editor.core.Modifier;
+import dev.schemarray.editor.core.Node;
+import dev.schemarray.editor.core.ObjectNode;
+import dev.schemarray.editor.core.ProjectNode;
+import dev.schemarray.editor.ui.MenuModel;
 import imgui.ImDrawList;
 import imgui.ImGui;
 import imgui.ImGuiViewport;
@@ -13,13 +24,16 @@ import imgui.flag.ImGuiStyleVar;
 import imgui.flag.ImGuiWindowFlags;
 import net.minecraft.client.Minecraft;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 /**
- * Placeholder editor chrome (WP 0.2): the thin top toolbar with only the "EDITOR  F6" chip, the status bar with the
- * navigation hints, and the fly HUD. Metrics and colours follow DESIGN.md sections 3, 5 and 6. WP 1.4 replaces this
- * with the real toolbar and status bar.
+ * The editor chrome (DESIGN 5 and 6): the toolbar at the top (mode chip, Add, tools, Mirror, Snap/Pivot/Local view,
+ * Undo/Redo, Windows, Push, quick guide) that narrows in three steps (labels, key caps, overflow menu), the status
+ * bar with hints per mode and the selection summary, and the fly HUD. Without Litematica (no session) only the mode
+ * chip and the navigation hints show.
  */
 public final class EditorChrome {
     private static final int FIXED = ImGuiWindowFlags.NoDocking | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize
@@ -30,13 +44,25 @@ public final class EditorChrome {
         static Hint of(String verb, String... caps) { return new Hint(caps, verb); }
     }
 
-    private static final List<Hint> HINTS_NAV = List.of(
+    private static final List<Hint> HINTS_IDLE = List.of(
+            Hint.of("select", "LMB"),
             Hint.of("orbit", "MMB"),
             Hint.of("pan", "Shift", "MMB"),
             Hint.of("zoom", "Wheel"),
             Hint.of("fly", "hold RMB"),
-            Hint.of("frame", "F"),
+            Hint.of("menu", "RMB"),
+            Hint.of("add", "Shift", "A"),
             Hint.of("leave", "F6"));
+
+    private static final List<Hint> HINTS_SELECTED = List.of(
+            Hint.of("move", "G"),
+            Hint.of("rotate", "R"),
+            Hint.of("mirror", "M"),
+            Hint.of("duplicate", "Shift", "D"),
+            Hint.of("hide", "H"),
+            Hint.of("delete", "X"),
+            Hint.of("frame", "F"),
+            Hint.of("menu", "RMB"));
 
     private static final List<Hint> HINTS_FLY = List.of(
             Hint.of("move", "W", "A", "S", "D"),
@@ -45,65 +71,288 @@ public final class EditorChrome {
             Hint.of("speed", "Wheel"),
             Hint.of("stop", "release RMB"));
 
+    private static final List<Hint> HINTS_RENAME = List.of(Hint.of("rename", "Enter"), Hint.of("cancel", "Esc"));
+
+    private static final List<Hint> HINTS_TREE_DRAG = List.of(
+            Hint.of("reorder: drop between rows", "drag"),
+            Hint.of("move in: drop on a folder, project or local assembly", "drag"),
+            Hint.of("cancel", "Esc"));
+
+    private static boolean guideRequest;
+
     private EditorChrome() {}
 
-    public static void draw() {
-        float s = UiHost.scale();
+    /** Draws toolbar, status bar and the fly HUD. {@code s} is null without Litematica. */
+    public static void draw(EditorSession s) {
+        float sc = UiHost.scale();
         ImGuiViewport vp = ImGui.getMainViewport();
-        float toolbarBottom = drawToolbar(vp, s);
-        drawStatusBar(vp, s);
-        drawFlyHud(vp, s, toolbarBottom);
+        float toolbarBottom = drawToolbar(s, vp, sc);
+        drawStatusBar(s, vp, sc);
+        drawFlyHud(vp, sc, toolbarBottom);
     }
 
     // ------------------------------------------------------------------ toolbar
 
-    /** Draws the toolbar and returns its bottom edge (screen y). */
-    private static float drawToolbar(ImGuiViewport vp, float s) {
-        float pad = 4 * s, chipH = 28 * s, h = chipH + 2 * pad, top = vp.getPosY() + 10 * s;
+    /** One toolbar button's content. */
+    private record Btn(String id, String icon, String label, String cap, boolean active, boolean enabled, String tip) {}
+
+    private static float btnWidth(Btn b, boolean labels, boolean caps, float sc) {
+        float w = 16 * sc + 15 * sc;
+        if (labels && b.label() != null) w += 6 * sc + ImGui.calcTextSizeX(b.label());
+        if (caps && b.cap() != null) w += 6 * sc + Ui.capWidth(b.cap());
+        return w;
+    }
+
+    /** Draws one button at the cursor; returns true when clicked. */
+    private static boolean btn(Btn b, boolean labels, boolean caps, float sc, float h) {
+        ImDrawList dl = ImGui.getWindowDrawList();
+        float w = btnWidth(b, labels, caps, sc);
+        float x = ImGui.getCursorScreenPosX(), y = ImGui.getCursorScreenPosY();
+        boolean hit = ImGui.invisibleButton("##tb_" + b.id(), w, h);
+        boolean hot = ImGui.isItemHovered() && b.enabled();
+        if (b.active() || hot) dl.addRectFilled(x, y, x + w, y + h, Ui.c(Theme.BTN), 6 * sc);
+        if (b.active()) dl.addRect(x + 1, y + 1, x + w - 1, y + h - 1, Ui.c(Theme.ACCENT, 0.33f), 6 * sc);
+        int rgb = !b.enabled() ? Theme.GUTTER : b.active() ? Theme.ACCENT : hot ? Theme.FG : Theme.DIM;
+        float cx = x + 8 * sc;
+        EditorIcons.draw(dl, b.icon(), cx + 7.5f * sc, y + h * 0.5f, 7.5f * sc, Ui.c(rgb));
+        cx += 15 * sc;
+        if (labels && b.label() != null) {
+            cx += 6 * sc;
+            dl.addText(cx, y + (h - ImGui.getFontSize()) * 0.5f, Ui.c(b.enabled() ? (b.active() ? Theme.ACCENT : hot ? Theme.FG : Theme.DIM) : Theme.GUTTER), b.label());
+            cx += ImGui.calcTextSizeX(b.label());
+        }
+        if (caps && b.cap() != null) {
+            cx += 6 * sc;
+            Ui.keyCap(dl, cx, y + (h - 18 * sc) * 0.5f, b.cap(), b.enabled() ? Theme.DIM : Theme.GUTTER);
+        }
+        if (b.tip() != null && !b.tip().isEmpty()) Ui.tooltip(b.tip());
+        return hit && b.enabled();
+    }
+
+    private static float drawToolbar(EditorSession s, ImGuiViewport vp, float sc) {
+        float pad = 4 * sc, h = 28 * sc, barH = h + 2 * pad, top = vp.getPosY() + 10 * sc;
         Theme.push(UiHost.theme().small());
         String label = "EDITOR";
         float labelW = ImGui.calcTextSizeX(label);
         ImGui.popFont();
-        Theme.push(UiHost.theme().monoS());
-        float capW = ImGui.calcTextSizeX("F6") + 10 * s;
-        ImGui.popFont();
-        float chipW = 8 * s + labelW + 6 * s + capW + 8 * s;
-        float w = chipW + 2 * pad;
-        ImGui.setNextWindowPos(vp.getPosX() + (vp.getSizeX() - w) * 0.5f, top);
-        ImGui.setNextWindowSize(w, h);
+        float chipW = 8 * sc + labelW + 6 * sc + Ui.capWidth("F6") + 8 * sc;
 
+        Btn add = new Btn("add", "plus", "Add", "Shift A", false, s != null, "Add (Shift A)");
+        Btn sel = new Btn("sel", "cursor", "Select", "W", s != null && s.tool() == Tool.SELECT, s != null, "Select tool");
+        Btn mov = new Btn("mov", "move", "Move", "G", s != null && s.tool() == Tool.MOVE, s != null, "Move tool (the gizmo comes in a later 2.0 alpha)");
+        Btn rot = new Btn("rot", "rotate", "Rotate", "R", s != null && s.tool() == Tool.ROTATE, s != null, "Rotate tool (the gizmo comes in a later 2.0 alpha)");
+        Btn box = new Btn("box", "box", "Box", "B", false, false, "Box select. " + MenuModel.LATER);
+        boolean hasSel = s != null && !s.selection.isEmpty();
+        Btn mir = new Btn("mir", "mirror", null, "M", false, hasSel, hasSel ? "Mirror X (M)" : "Mirror X: nothing selected");
+        Btn snap = new Btn("snap", "magnet", "Snap", null, false, false, "Snap. " + MenuModel.LATER);
+        Btn local = new Btn("local", "local", null, "/", false, false, "Local view. " + MenuModel.LATER);
+        var undo = s == null ? null : s.undoStack();
+        boolean canUndo = undo != null && undo.canUndo(), canRedo = undo != null && undo.canRedo();
+        Btn und = new Btn("undo", "undo", null, null, false, canUndo, canUndo ? "Undo " + undo.undoLabel().orElse("") + " (Ctrl Z)" : "Nothing to undo");
+        Btn red = new Btn("redo", "redo", null, null, false, canRedo, canRedo ? "Redo " + undo.redoLabel().orElse("") + " (Ctrl Shift Z)" : "Nothing to redo");
+        Btn win = new Btn("win", "layout", null, null, false, s != null, "Windows");
+        Btn push = new Btn("push", "sync", "Push", null, false, false, "No project is shared on Syncmatica. Share one from its right-click menu.");
+        Btn help = new Btn("help", "help", null, null, false, true, "Quick guide");
+        float comboW = 128 * sc, sep = 1 * sc + 8 * sc;
+
+        Theme.push(UiHost.theme().ui());
+        float avail = vp.getSizeX() - 24 * sc;
+        int stage = 0;
+        float need = 0;
+        for (; stage <= 3; stage++) {
+            boolean labels = stage == 0, caps = stage <= 1;
+            need = 2 * pad + chipW;
+            if (s != null) {
+                need += sep + btnWidth(add, labels, caps, sc) + sep;
+                for (Btn b : new Btn[] {sel, mov, rot, box}) need += btnWidth(b, labels, caps, sc) + 4 * sc;
+                need += sep + btnWidth(mir, labels, caps, sc);
+                if (stage < 3) {
+                    need += sep + btnWidth(snap, labels, caps, sc) + 4 * sc + comboW + 4 * sc + btnWidth(local, labels, caps, sc);
+                    need += sep + btnWidth(und, false, false, sc) + 4 * sc + btnWidth(red, false, false, sc);
+                    need += sep + btnWidth(win, false, false, sc);
+                }
+                need += sep + btnWidth(push, labels, false, sc);
+                need += sep + btnWidth(help, false, false, sc);
+            }
+            if (need <= avail) break;
+        }
+        stage = Math.min(stage, 3);
+        boolean labels = stage == 0, caps = stage <= 1, overflow = stage == 3;
+        float w = Math.min(need, avail);
+
+        ImGui.setNextWindowPos(vp.getPosX() + (vp.getSizeX() - w) * 0.5f, top);
+        ImGui.setNextWindowSize(w, barH);
         ImGui.pushStyleVar(ImGuiStyleVar.WindowPadding, pad, pad);
-        ImGui.pushStyleVar(ImGuiStyleVar.WindowRounding, 8 * s);
+        ImGui.pushStyleVar(ImGuiStyleVar.WindowRounding, 8 * sc);
         ImGui.pushStyleVar(ImGuiStyleVar.WindowBorderSize, 1f);
+        ImGui.pushStyleVar(ImGuiStyleVar.ItemSpacing, 4 * sc, 0);
+        ImGui.pushStyleVar(ImGuiStyleVar.FramePadding, 9 * sc, 5 * sc);
         ImGui.pushStyleColor(ImGuiCol.WindowBg, Theme.u32(Theme.PANEL, 0.94f));
         ImGui.pushStyleColor(ImGuiCol.Border, Theme.u32(Theme.LINE));
         if (ImGui.begin("##la_toolbar", FIXED | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav)) {
-            float x = ImGui.getCursorScreenPosX(), y = ImGui.getCursorScreenPosY();
-            boolean clicked = ImGui.invisibleButton("##chip", chipW, chipH);   // true on release, so ImGui sees the whole click
-            boolean hot = ImGui.isItemHovered();
             ImDrawList dl = ImGui.getWindowDrawList();
-            dl.addRectFilled(x, y, x + chipW, y + chipH, Theme.u32(Theme.SEL, hot ? 1f : 0.85f), 6 * s);
+            float x = ImGui.getCursorScreenPosX(), y = ImGui.getCursorScreenPosY();
+            // 1. mode chip
+            boolean clicked = ImGui.invisibleButton("##chip", chipW, h);
+            boolean hot = ImGui.isItemHovered();
+            dl.addRectFilled(x, y, x + chipW, y + h, Theme.u32(Theme.SEL, hot ? 1f : 0.85f), 6 * sc);
             Theme.push(UiHost.theme().small());
-            float fh = ImGui.getFontSize();
-            dl.addText(x + 8 * s, y + (chipH - fh) * 0.5f, Theme.u32(Theme.ACCENT), label);
+            dl.addText(x + 8 * sc, y + (h - ImGui.getFontSize()) * 0.5f, Theme.u32(Theme.ACCENT), label);
             ImGui.popFont();
-            keyCap(dl, x + 8 * s + labelW + 6 * s, y + (chipH - 18 * s) * 0.5f, "F6", s, Theme.DIM);
+            Ui.keyCap(dl, x + 8 * sc + labelW + 6 * sc, y + (h - 18 * sc) * 0.5f, "F6", Theme.DIM);
             if (hot) ImGui.setTooltip("Leave the editor (F6)");
             if (clicked) EditorMode.exit(Minecraft.getInstance(), true);
+
+            if (s != null) {
+                ImGui.sameLine(0, sep);
+                // 2. Add
+                if (btn(add, labels, caps, sc, h)) {
+                    ContextMenus.anchor(ImGui.getItemRectMinX(), ImGui.getItemRectMaxY() + 4 * sc);
+                    ContextMenus.openAdd(s);
+                }
+                ImGui.sameLine(0, sep);
+                // 3. tools
+                if (btn(sel, labels, caps, sc, h)) s.setTool(Tool.SELECT);
+                ImGui.sameLine();
+                if (btn(mov, labels, caps, sc, h)) s.setTool(Tool.MOVE);
+                ImGui.sameLine();
+                if (btn(rot, labels, caps, sc, h)) s.setTool(Tool.ROTATE);
+                ImGui.sameLine();
+                btn(box, labels, caps, sc, h);
+                // 4. mirror
+                ImGui.sameLine(0, sep);
+                if (btn(mir, labels, caps, sc, h)) s.actions.run("t.mirror");
+                if (!overflow) {
+                    // 5. snap, pivot, local view
+                    ImGui.sameLine(0, sep);
+                    btn(snap, labels, caps, sc, h);
+                    ImGui.sameLine();
+                    ImGui.beginDisabled();
+                    ImGui.setNextItemWidth(comboW);
+                    if (ImGui.beginCombo("##pivot", "Median")) ImGui.endCombo();
+                    ImGui.endDisabled();
+                    Ui.tooltip("Pivot. " + MenuModel.LATER);
+                    ImGui.sameLine();
+                    btn(local, labels, caps, sc, h);
+                    // 6. undo / redo
+                    ImGui.sameLine(0, sep);
+                    if (btn(und, false, false, sc, h)) s.actions.undo();
+                    ImGui.sameLine();
+                    if (btn(red, false, false, sc, h)) s.actions.redo();
+                    // 7. windows
+                    ImGui.sameLine(0, sep);
+                    if (btn(win, false, false, sc, h)) ImGui.openPopup("##winmenu");
+                    drawWindowsMenu(s);
+                }
+                // 8. push
+                ImGui.sameLine(0, sep);
+                btn(push, labels, false, sc, h);
+                // 9. help, or the overflow button
+                ImGui.sameLine(0, sep);
+                if (overflow) {
+                    if (btn(new Btn("more", "kebab", null, null, false, true, "More"), false, false, sc, h)) ImGui.openPopup("##overflow");
+                    drawOverflow(s);
+                } else if (btn(help, false, false, sc, h)) {
+                    guideRequest = true;
+                }
+                drawGuide(sc);
+            }
         }
         ImGui.end();
         ImGui.popStyleColor(2);
-        ImGui.popStyleVar(3);
-        return top + h;
+        ImGui.popStyleVar(5);
+        ImGui.popFont();
+        return top + barH;
+    }
+
+    private static void drawWindowsMenu(EditorSession s) {
+        float sc = Ui.s();
+        ImGui.setNextWindowPos(ImGui.getItemRectMinX(), ImGui.getItemRectMaxY() + 4 * sc, imgui.flag.ImGuiCond.Appearing);
+        if (ImGui.beginPopup("##winmenu")) {
+            s.popupOpen = true;
+            windowItems(s);
+            ImGui.endPopup();
+        }
+    }
+
+    private static void windowItems(EditorSession s) {
+        if (ImGui.menuItem("Scene", "", s.showScene)) s.showScene = !s.showScene;
+        if (ImGui.menuItem("Properties", "", s.showProperties)) s.showProperties = !s.showProperties;
+        ImGui.beginDisabled();
+        ImGui.menuItem("Top view", "", false);
+        ImGui.endDisabled();
+        Ui.tooltip(MenuModel.LATER);
+        ImGui.separator();
+        if (ImGui.menuItem("Hide all windows", "Tab")) s.windowsHidden = !s.windowsHidden;
+        ImGui.separator();
+        if (ImGui.menuItem("Reset layout")) {
+            s.resetLayout = true;
+            s.showScene = true;
+            s.showProperties = true;
+            s.windowsHidden = false;
+        }
+    }
+
+    private static void drawOverflow(EditorSession s) {
+        float sc = Ui.s();
+        ImGui.setNextWindowPos(ImGui.getItemRectMinX(), ImGui.getItemRectMaxY() + 4 * sc, imgui.flag.ImGuiCond.Appearing);
+        if (ImGui.beginPopup("##overflow")) {
+            s.popupOpen = true;
+            var undo = s.undoStack();
+            ImGui.beginDisabled();
+            ImGui.menuItem("Snap");
+            ImGui.menuItem("Local view", "/");
+            ImGui.endDisabled();
+            Ui.tooltip(MenuModel.LATER);
+            ImGui.separator();
+            if (ImGui.menuItem("Undo", "Ctrl Z", false, undo.canUndo())) s.actions.undo();
+            if (ImGui.menuItem("Redo", "Ctrl Shift Z", false, undo.canRedo())) s.actions.redo();
+            ImGui.separator();
+            if (ImGui.beginMenu("Windows")) {
+                windowItems(s);
+                ImGui.endMenu();
+            }
+            if (ImGui.menuItem("Quick guide")) guideRequest = true;
+            ImGui.endPopup();
+        }
+    }
+
+    private static void drawGuide(float sc) {
+        if (guideRequest) {
+            guideRequest = false;
+            ImGui.openPopup("##guide");
+        }
+        ImGui.setNextWindowSizeConstraints(380 * sc, 0, 460 * sc, 700 * sc);
+        if (ImGui.beginPopup("##guide")) {
+            Ui.label("Quick guide");
+            ImGui.textWrapped("Navigate: hold the middle mouse button to orbit, Shift + middle to pan, the wheel zooms toward the cursor. "
+                    + "Hold the right mouse button and use W A S D, Q and E to fly; a short right click opens the menu.");
+            Ui.section("Keys");
+            String[][] keys = {{"W G R", "select / move / rotate tool"}, {"M", "mirror X"}, {"Shift D / Alt D", "duplicate / linked duplicate"},
+                    {"Ctrl G", "create assembly"}, {"H / Alt H", "hide / show all"}, {"A / Alt A", "select all / none"},
+                    {"F", "frame selection"}, {"F2", "rename"}, {"X / Delete", "delete"}, {"PgUp PgDn", "front order"},
+                    {"Ctrl Z / Ctrl Shift Z", "undo / redo"}, {"Ctrl S", "save all projects"}, {"Tab", "hide windows"}};
+            for (String[] k : keys) {
+                ImGui.pushStyleColor(ImGuiCol.Text, Ui.c(Theme.ACCENT));
+                ImGui.text(k[0]);
+                ImGui.popStyleColor();
+                ImGui.sameLine(150 * sc);
+                ImGui.text(k[1]);
+            }
+            Ui.section("Non-destructive and baked");
+            ImGui.textWrapped("Arrays and Booleans stay editable modifiers. Apply, Realise and Bake turn them into real objects or files "
+                    + "(each can be undone with Ctrl Z).");
+            ImGui.endPopup();
+        }
     }
 
     // ------------------------------------------------------------------ status bar
 
-    private static void drawStatusBar(ImGuiViewport vp, float s) {
-        float h = 24 * s;
+    private static void drawStatusBar(EditorSession s, ImGuiViewport vp, float sc) {
+        float h = 24 * sc;
         ImGui.setNextWindowPos(vp.getPosX(), vp.getPosY() + vp.getSizeY() - h);
         ImGui.setNextWindowSize(vp.getSizeX(), h);
-        ImGui.pushStyleVar(ImGuiStyleVar.WindowPadding, 10 * s, 0f);
+        ImGui.pushStyleVar(ImGuiStyleVar.WindowPadding, 10 * sc, 0f);
         ImGui.pushStyleVar(ImGuiStyleVar.WindowRounding, 0f);
         ImGui.pushStyleVar(ImGuiStyleVar.WindowBorderSize, 0f);
         ImGui.pushStyleColor(ImGuiCol.WindowBg, Theme.u32(Theme.PANEL2));
@@ -111,22 +360,22 @@ public final class EditorChrome {
                 | ImGuiWindowFlags.NoNav | ImGuiWindowFlags.NoInputs)) {
             ImDrawList dl = ImGui.getWindowDrawList();
             float x0 = ImGui.getWindowPosX(), y0 = ImGui.getWindowPosY(), w = ImGui.getWindowWidth();
-            dl.addLine(x0, y0 + 0.5f, x0 + w, y0 + 0.5f, Theme.u32(Theme.LINE), 1f);   // top rule
+            dl.addLine(x0, y0 + 0.5f, x0 + w, y0 + 0.5f, Theme.u32(Theme.LINE), 1f);
 
-            // right: selection summary (nothing can be selected yet)
             Theme.push(UiHost.theme().small());
-            String sel = "Nothing selected";
-            float selW = ImGui.calcTextSizeX(sel), fh = ImGui.getFontSize();
-            dl.addText(x0 + w - 10 * s - selW, y0 + (h - fh) * 0.5f, Theme.u32(Theme.FG), sel);
+            String summary = summary(s);
+            float fh = ImGui.getFontSize();
+            float sumW = Math.min(ImGui.calcTextSizeX(summary), w * 0.45f);
+            String shown = ImGui.calcTextSizeX(summary) > sumW ? Ui.fitEnd(summary, sumW) : summary;
+            dl.addText(x0 + w - 10 * sc - ImGui.calcTextSizeX(shown), y0 + (h - fh) * 0.5f, Theme.u32(Theme.FG), shown);
 
-            // left: hints for the current mode, dropped from the end when space runs out
-            List<Hint> hints = EditorCamera.get().isFlying() ? HINTS_FLY : HINTS_NAV;
-            float limit = x0 + w - 10 * s - selW - 14 * s;
-            float x = x0 + 10 * s;
+            List<Hint> hints = hintsFor(s);
+            float limit = x0 + w - 10 * sc - sumW - 14 * sc;
+            float x = x0 + 10 * sc;
             for (Hint hint : hints) {
-                float need = hintWidth(hint, s);
+                float need = hintWidth(hint, sc);
                 if (x + need > limit) break;
-                x = drawHint(dl, hint, x, y0, h, s) + 10 * s;
+                x = drawHint(dl, hint, x, y0, h, sc) + 10 * sc;
             }
             ImGui.popFont();
         }
@@ -135,10 +384,38 @@ public final class EditorChrome {
         ImGui.popStyleVar(3);
     }
 
+    private static List<Hint> hintsFor(EditorSession s) {
+        if (EditorCamera.get().isFlying()) return HINTS_FLY;
+        if (SceneWindow.isRenaming()) return HINTS_RENAME;
+        if (SceneWindow.isDragging()) return HINTS_TREE_DRAG;
+        if (s != null && !s.selection.isEmpty()) return HINTS_SELECTED;
+        return HINTS_IDLE;
+    }
+
+    /** "Nothing selected" / "tunnel_segment · 8×6×7 at 12, 64, -3 · array ×6" / "3 objects · 40×16×22". */
+    private static String summary(EditorSession s) {
+        if (s == null || s.selection.isEmpty()) return "Nothing selected";
+        List<UUID> ids = s.selection.ids();
+        Box b = s.boxes().unionOf(s.scene(), ids);
+        String size = b == null ? "" : " · " + b.size().x() + "×" + b.size().y() + "×" + b.size().z();
+        if (ids.size() > 1) return ids.size() + " objects" + size;
+        Node n = s.scene().byId(ids.get(0));
+        if (n == null) return "Nothing selected";
+        if (n instanceof ProjectNode) return n.name() + " · project";
+        StringBuilder sb = new StringBuilder(n.name());
+        if (b != null) sb.append(" · ").append(b.size().x()).append('×').append(b.size().y()).append('×').append(b.size().z())
+                .append(" at ").append(b.min().x()).append(", ").append(b.min().y()).append(", ").append(b.min().z());
+        List<Modifier> mods = n instanceof ObjectNode o ? o.mods() : n instanceof AssemblyNode a ? a.mods() : List.of();
+        List<ArrayModifier> arrays = new ArrayList<>();
+        for (Modifier m : mods) if (m instanceof ArrayModifier am && am.enabled) arrays.add(am);
+        if (!arrays.isEmpty()) sb.append(String.format(Locale.ROOT, " · array ×%d", ArrayCells.copyCountOf(arrays) + 1));
+        return sb.toString();
+    }
+
     /** Width of a hint; the small font must be current. */
     private static float hintWidth(Hint hint, float s) {
         float w = 0;
-        for (String cap : hint.caps()) w += capWidth(cap, s) + 3 * s;
+        for (String cap : hint.caps()) w += Ui.capWidth(cap) + 3 * s;
         return w + 3 * s + ImGui.calcTextSizeX(hint.verb());
     }
 
@@ -146,30 +423,12 @@ public final class EditorChrome {
     private static float drawHint(ImDrawList dl, Hint hint, float x, float y0, float h, float s) {
         float capH = 18 * s;
         for (String cap : hint.caps()) {
-            x = keyCap(dl, x, y0 + (h - capH) * 0.5f, cap, s, Theme.DIM) + 3 * s;
+            x = Ui.keyCap(dl, x, y0 + (h - capH) * 0.5f, cap, Theme.DIM) + 3 * s;
         }
         x += 3 * s;
         float fh = ImGui.getFontSize();
         dl.addText(x, y0 + (h - fh) * 0.5f, Theme.u32(Theme.DIM), hint.verb());
         return x + ImGui.calcTextSizeX(hint.verb());
-    }
-
-    private static float capWidth(String text, float s) {
-        Theme.push(UiHost.theme().monoS());
-        float w = ImGui.calcTextSizeX(text) + 10 * s;
-        ImGui.popFont();
-        return w;
-    }
-
-    /** A key cap (DESIGN 3.2: 18 high, pad-x 5, rounding 4, CHIP fill, LINE border, monoS). Returns its right edge. */
-    private static float keyCap(ImDrawList dl, float x, float y, String text, float s, int textRgb) {
-        Theme.push(UiHost.theme().monoS());
-        float w = ImGui.calcTextSizeX(text) + 10 * s, h = 18 * s, fh = ImGui.getFontSize();
-        dl.addRectFilled(x, y, x + w, y + h, Theme.u32(Theme.CHIP), 4 * s);
-        dl.addRect(x, y, x + w, y + h, Theme.u32(Theme.LINE), 4 * s);
-        dl.addText(x + 5 * s, y + (h - fh) * 0.5f, Theme.u32(textRgb), text);
-        ImGui.popFont();
-        return x + w;
     }
 
     // ------------------------------------------------------------------ fly HUD

@@ -218,7 +218,7 @@ public final class ProjectManager {
     private boolean save(ProjectNode p) {
         if (p.path().isEmpty()) return false;
         try {
-            ProjectIo.write(p, ProjectLayout.projectFile(Path.of(p.path())));
+            ProjectIo.write(p, ProjectLayout.projectFile(dirOf(p)));
             saved.put(p.id(), ProjectIo.toJson(p));
             return true;
         } catch (IOException | RuntimeException e) {
@@ -264,6 +264,7 @@ public final class ProjectManager {
         return true;
     }
 
+/** The folder of a project: its path, made absolute against Litematica's schematics folder when it is relative. */    private Path dirOf(ProjectNode p) {        Path x = Path.of(p.path());        return x.isAbsolute() ? x : env.schematicsDir().resolve(x).toAbsolutePath().normalize();    }
     public ProjectNode find(UUID id) {
         for (ProjectNode p : scene.projects()) if (p.id().equals(id)) return p;
         return null;
@@ -382,10 +383,10 @@ public final class ProjectManager {
         JsonObject w = worldEntry(true);
         if (w == null) return;
         JsonArray open = new JsonArray();
-        for (ProjectNode p : scene.projects()) open.add(p.path());
+        for (ProjectNode p : scene.projects()) open.add(dirOf(p).toString());
         w.add("open", open);
         ProjectNode a = scene.activeProject();
-        if (a != null) w.addProperty("active", a.path());
+        if (a != null) w.addProperty("active", dirOf(a).toString());
         else w.remove("active");
         writeSession();
     }

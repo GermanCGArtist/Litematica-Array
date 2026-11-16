@@ -327,7 +327,7 @@ public final class ReconcileCore {
         if (file == null || file.isEmpty()) return null;
         try {
             if (proj != null) {
-                return proj.path().isEmpty() ? null : ProjectLayout.resolveInside(Path.of(proj.path()), file);
+                return proj.path().isEmpty() ? null : ProjectLayout.resolveInside((looseBase != null ? looseBase.resolve(proj.path()).normalize() : Path.of(proj.path())), file);
             }
             Path p = Path.of(file);
             if (p.isAbsolute()) return p.normalize();

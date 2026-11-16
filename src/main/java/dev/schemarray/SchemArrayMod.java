@@ -14,6 +14,7 @@ public final class SchemArrayMod implements ClientModInitializer {
         EditorMode.init();   // F6 editor mode; needs no Litematica
         if (!FabricLoader.getInstance().isModLoaded("litematica")) return;
         ThumbnailCompat.register();
+        dev.schemarray.editor.world.WorldOverlay.init();
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             ShapePreview.clear();
             Reconciler.onDisconnect();   // saves the open projects
@@ -21,6 +22,7 @@ public final class SchemArrayMod implements ClientModInitializer {
         ClientTickEvents.END_CLIENT_TICK.register(mc -> {
             try {
                 Reconciler.tick(mc);   // before ArraySync: it decides which arrays the editor owns
+                dev.schemarray.editor.EditorSession.tick(mc);   // undo stack, drift, autosave
             } catch (Throwable t) {
                 System.out.println("[SchematicArray] editor failed: " + t);
             }
