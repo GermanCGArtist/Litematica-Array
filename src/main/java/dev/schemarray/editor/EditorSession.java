@@ -1,6 +1,8 @@
 package dev.schemarray.editor;
 
 import dev.schemarray.editor.cam.EditorCamera;
+import dev.schemarray.editor.core.AssemblyBounds;
+import dev.schemarray.editor.core.AssemblyNode;
 import dev.schemarray.editor.core.Box;
 import dev.schemarray.editor.core.Node;
 import dev.schemarray.editor.core.ObjectNode;
@@ -9,7 +11,11 @@ import dev.schemarray.editor.core.ProjectNode;
 import dev.schemarray.editor.core.Scene;
 import dev.schemarray.editor.core.Vec3i;
 import dev.schemarray.editor.gizmo.Pivots;
+import dev.schemarray.editor.io.ProjectLayout;
+import dev.schemarray.editor.io.ZipExport;
 import dev.schemarray.editor.mc.ExternalChange;
+import dev.schemarray.editor.mc.LasmCache;
+import dev.schemarray.editor.mc.LinkPaths;
 import dev.schemarray.editor.ops.Move;
 import dev.schemarray.editor.world.Gizmo;
 import dev.schemarray.editor.mc.ProjectManager;
@@ -120,7 +126,7 @@ public final class EditorSession {
     private Set<UUID> localOwners;
 
     /** UI requests the windows pick up on their next frame. */
-    public UUID renameRequest, scrollToRow, addSchematicParent;
+    public UUID renameRequest, scrollToRow, addSchematicParent, addAssemblyParent, linkProjectParent;
     public boolean focusFilter, addMenuRequest, newProjectRequest, openProjectRequest;
     public boolean popupOpen;
     public boolean resetLayout;
@@ -277,7 +283,7 @@ public final class EditorSession {
             public void affected(java.util.Collection<UUID> nodeIds) {
                 boxesAt = 0;
             }
-        }).setPortRoot(schematicsDir).setLooseDir("");
+        }).setPortRoot(schematicsDir).setLooseDir("").setLinks(LinkPaths::linksOf);
         undo = new UndoStack(ctx);
         selection.clear();
         boxes = null;
@@ -306,6 +312,174 @@ public final class EditorSession {
         boxesAt = 0;
     }
 
+    // ------------------------------------------------------------------------------------------ assemblies, links, files
+
+    private final LasmCache lasms = new LasmCache();
+    /** The exports (zip, bake, .litematic). */
+    public final EditorExports exports = new EditorExports(this);
+
+    /** The folder of a project as an absolute path. */
+    public Path projectDir(ProjectNode p) {
+        Path d = Path.of(p.path());
+        return (d.isAbsolute() ? d : schematicsDir.resolve(d)).toAbsolutePath().normalize();
+    }
+
+    /** The file of an object whose files are relative to {@code base}; null base means the object is in the model. */
+    public Path fileOf(ObjectNode o, Path base) {
+        if (base == null) return fileOf(o);
+        if (o.file().isEmpty()) return null;
+        try {
+            return ProjectLayout.resolveInside(base, o.file());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /** The file a linked assembly points to (the link is relative to {@code base}, null for an assembly in the model), or null. */
+    public Path linkTarget(AssemblyNode a, Path base) {
+        if (!a.isLinked()) return null;
+        Path from = base;
+        if (from == null) {
+            ProjectNode p = scene().projectOf(a);
+            if (p == null) return null;
+            from = projectDir(p);
+        }
+        return LinkPaths.target(from, ((AssemblyNode.Link) a.source()).path());
+    }
+
+    /** The parts of a linked assembly (read from its file, cached by modification time) with the base their files use; null when unreadable. */
+    public AssemblyBounds.Linked linkedParts(AssemblyNode a, Path base) {
+        Path target = linkTarget(a, base);
+        if (target == null) return null;
+        Path from = base != null ? base : projectDir(scene().projectOf(a));
+        List<Node> parts = lasms.parts(target);
+        return parts == null ? null : new AssemblyBounds.Linked(parts, LinkPaths.baseOf(from, target));
+    }
+
+    private final AssemblyBounds.Env boundsEnv = new AssemblyBounds.Env() {
+        @Override
+        public Vec3i size(ObjectNode o, Path base) {
+            Path f = fileOf(o, base);
+            return f == null ? null : sizeOfFile(f);
+        }
+
+        @Override
+        public AssemblyBounds.Linked linked(AssemblyNode a, Path base) {
+            return linkedParts(a, base);
+        }
+    };
+
+    /** Sizes and linked parts for {@link AssemblyBounds}, with the rules of the editor. */
+    public AssemblyBounds.Env boundsEnv() {
+        return boundsEnv;
+    }
+
+    /** The size an array of this assembly works on (its parts union, without its own array), or null when nothing has a size. */
+    public Vec3i assemblySize(AssemblyNode a) {
+        return AssemblyBounds.frame(a, null, boundsEnv).size();
+    }
+
+    /** Reload from source: every linked file is read again. */
+    public void reloadLinks() {
+        lasms.clear();
+        Reconciler.reloadLinks();
+        invalidateBoxes();
+    }
+
+    /** Links a {@code .lasm} (an absolute path) into a parent as a linked assembly; shows a refusal as a toast. */
+    public boolean linkAssembly(UUID parentId, Path lasm) {
+        Node parent = scene().byId(parentId);
+        ProjectNode proj = parent == null ? null : scene().projectOf(parent);
+        if (proj == null) {
+            toast(ToastQueue.Level.WARN, "Links go into a project: make one active first");
+            return false;
+        }
+        Path target = lasm.toAbsolutePath().normalize();
+        String name = target.getFileName().toString();
+        if (name.toLowerCase().endsWith(ProjectLayout.ASSEMBLY_EXT)) name = name.substring(0, name.length() - ProjectLayout.ASSEMBLY_EXT.length());
+        String link = LinkPaths.relativeLink(projectDir(proj), target);
+        var cmd = new dev.schemarray.editor.ops.LinkAssembly(parentId, -1, name, link, LinkPaths.identity(target), cameraBlock());
+        return runLink(cmd, cmd.assemblyId(), name);
+    }
+
+    /** Links another project (its folder) into a parent as a linked assembly. */
+    public boolean linkProject(UUID parentId, ProjectNode other) {
+        Node parent = scene().byId(parentId);
+        ProjectNode proj = parent == null ? null : scene().projectOf(parent);
+        if (proj == null) {
+            toast(ToastQueue.Level.WARN, "Links go into a project: make one active first");
+            return false;
+        }
+        Path file = projectDir(other).resolve(ProjectLayout.PROJECT_FILE);
+        String link = LinkPaths.relativeLink(projectDir(proj), file);
+        var cmd = new dev.schemarray.editor.ops.LinkProject(parentId, -1, other, link, cameraBlock());
+        return runLink(cmd, cmd.assemblyId(), other.name());
+    }
+
+    private boolean runLink(dev.schemarray.editor.ops.Command cmd, UUID id, String name) {
+        if (!actions.execute(cmd)) return false;
+        selection.set(id);
+        Node n = scene().byId(id);
+        if (n != null) tree.reveal(n);
+        scrollToRow = id;
+        toast(ToastQueue.Level.INFO, "Linked \"" + name + "\" at the camera target");
+        return true;
+    }
+
+    private Vec3i cameraBlock() {
+        var pos = EditorCamera.get().target();
+        return new Vec3i((int) Math.floor(pos.x), (int) Math.floor(pos.y), (int) Math.floor(pos.z));
+    }
+
+    /**
+     * Open source: for a link to a project, opens that project (the editor shows it in the tree); for a {@code .lasm}
+     * there is nothing to open, so a toast gives its path.
+     */
+    public void openSource(AssemblyNode a) {
+        Path target = linkTarget(a, null);
+        if (target == null) {
+            toast(ToastQueue.Level.WARN, "\"" + a.name() + "\" is not linked");
+            return;
+        }
+        if (target.getFileName().toString().equals(ProjectLayout.PROJECT_FILE)) {
+            try {
+                ProjectNode p = pm.open(target.getParent());
+                selection.set(p.id());
+                tree.reveal(p);
+                scrollToRow = p.id();
+                toast(ToastQueue.Level.INFO, "Opened project \"" + p.name() + "\"");
+            } catch (IOException | RuntimeException e) {
+                toast(ToastQueue.Level.ERROR, "Cannot open the project: " + e.getMessage());
+            }
+        } else {
+            toast(ToastQueue.Level.INFO, "Source: " + target);
+        }
+    }
+
+    /** The .lasm files the Add menu offers: below the active project folder, then below schematics/ (not in Projects). */
+    public List<Path> listLasm() {
+        List<Path> out = new ArrayList<>();
+        ProjectNode ap = scene().activeProject();
+        if (ap != null) collectLasm(projectDir(ap), 6, false, out);
+        collectLasm(schematicsDir, 4, true, out);
+        return out;
+    }
+
+    private void collectLasm(Path root, int depth, boolean skipProjects, List<Path> out) {
+        try (var st = Files.walk(root, depth)) {
+            st.filter(p -> p.getFileName().toString().toLowerCase().endsWith(ProjectLayout.ASSEMBLY_EXT)).forEach(p -> {
+                String r = root.relativize(p).toString().replace('\\', '/');
+                if (skipProjects && (r.startsWith(ProjectLayout.PROJECTS_DIR + "/") || r.startsWith(ZipExport.EXPORTS_DIR + "/"))) return;
+                if (r.contains("/.") || r.startsWith(".")) return;
+                Path abs = p.toAbsolutePath().normalize();
+                if (!out.contains(abs)) out.add(abs);
+            });
+        } catch (IOException | RuntimeException ignored) {
+            // unreadable folder: fewer entries
+        }
+    }
+
+
     // ------------------------------------------------------------------------------------------ sizes and boxes
 
     /** The file of an object as an absolute path (project files below the project folder, Loose below schematics). */
@@ -328,7 +502,11 @@ public final class EditorSession {
     /** The enclosing size of an object's schematic, or null when it cannot be read. */
     public Vec3i sizeOf(ObjectNode o) {
         Path f = fileOf(o);
-        if (f == null) return null;
+        return f == null ? null : sizeOfFile(f);
+    }
+
+    /** The enclosing size of a schematic file, or null when it cannot be read (a failed file is not parsed again for 3 s). */
+    public Vec3i sizeOfFile(Path f) {
         long now = System.currentTimeMillis();
         Long until = unreadable.get(f);
         if (until != null && now < until) return null;          // a file that failed is not parsed again every frame
@@ -348,7 +526,7 @@ public final class EditorSession {
         long now = System.nanoTime();
         if (boxes == null || boxesAt == 0 || now - boxesAt > 100_000_000L) {
             Scene sc = scene();
-            boxes = new WorldBoxes(sc, o -> visibleInLocalView(o) ? sizeOf(o) : null);
+            boxes = new WorldBoxes(sc, o -> visibleInLocalView(o) ? sizeOf(o) : null, boundsEnv);
             boxesAt = now;
             computeOverlaps(sc);
         }
@@ -600,6 +778,58 @@ public final class EditorSession {
             EditorSession.this.toggleLocalView();
         }
 
+
+        @Override
+        public Vec3i sizeOfAssembly(AssemblyNode a) {
+            return assemblySize(a);
+        }
+
+        @Override
+        public void requestAddAssembly(UUID parentId) {
+            addAssemblyParent = parentId;
+        }
+
+        @Override
+        public void requestLinkProject(UUID parentId) {
+            linkProjectParent = parentId;
+        }
+
+        @Override
+        public boolean linkProject(UUID parentId, ProjectNode project) {
+            return EditorSession.this.linkProject(parentId, project);
+        }
+
+        @Override
+        public void reloadLinks() {
+            EditorSession.this.reloadLinks();
+        }
+
+        @Override
+        public void openSource(AssemblyNode a) {
+            EditorSession.this.openSource(a);
+        }
+
+        @Override
+        public void export(String kind, List<Node> nodes) {
+            Node one = nodes.size() == 1 ? nodes.get(0) : null;
+            switch (kind) {
+                case "zip" -> {
+                    if (one instanceof AssemblyNode a) exports.exportAssembly(a);
+                    else if (one instanceof dev.schemarray.editor.core.FolderNode f) exports.exportFolder(f);
+                    else if (one instanceof ProjectNode p) exports.exportProject(p);
+                    else exports.exportSelection(nodes);
+                }
+                case "bake" -> {
+                    if (one instanceof ProjectNode p) exports.bakeProject(p);
+                    else exports.bake(nodes, one != null ? one.name() : "Bake");
+                }
+                case "litematic" -> {
+                    if (one instanceof ObjectNode o) exports.exportLitematic(o);
+                    else EditorSession.this.toast(ToastQueue.Level.INFO, "Select one object to export its schematic");
+                }
+                default -> { }
+            }
+        }
         @Override
         public void showInTree(UUID id) {
             Node n = scene().byId(id);

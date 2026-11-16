@@ -113,8 +113,8 @@ public final class MenuModel {
     public static List<Item> addItems(boolean canAdd, String whyNot) {
         List<Item> out = new ArrayList<>();
         out.add(item("add.schematic", "Schematic…", "", "object", canAdd, whyNot));
-        out.add(later("add.assembly", "Assembly (.lasm)…", "", "assembly"));
-        out.add(later("add.link", "Link project as assembly…", "", "link"));
+        out.add(item("add.assembly", "Assembly (.lasm)…", "", "assembly", canAdd, whyNot));
+        out.add(item("add.link", "Link project as assembly…", "", "link", canAdd, whyNot));
         out.add(later("add.area", "Heavymatica area", "", "areas"));
         out.add(item("add.folder", "Folder", "", "folder", canAdd, whyNot));
         return out;
@@ -248,6 +248,7 @@ public final class MenuModel {
         }
         if (!area && !cutter) m.addAll(frontOrder(first, !single));
         m.add(item("assembly.create", "Create assembly from selection", "Ctrl G", "group"));
+        m.add(item("assembly.createlinked", "Create linked assembly (.lasm)", "", "link"));
         m.add(moveTo(c.scene(), sel));
         m.add(sep());
         m.add(item("hide", allHidden(sel) ? "Show" : "Hide", "H", allHidden(sel) ? "eye" : "eyeoff"));
@@ -256,8 +257,8 @@ public final class MenuModel {
         if (!area) {
             m.add(sep());
             m.add(sub("Export", "export", single
-                    ? List.of(later("export.schem", "Schematic (.litematic)…", "", "export"), later("export.bake", "Baked with modifiers (.litematic)…", "", "export"))
-                    : List.of(later("export.zip", "Selection (.zip)", "", "export"), later("export.bake", "Bake into one .litematic", "", "export"))));
+                    ? List.of(item("export.schem", "Schematic (.litematic)", "", "export"), item("export.bake", "Baked with modifiers (.litematic)", "", "export"))
+                    : List.of(item("export.zip", "Selection (.zip)", "", "export"), item("export.bake", "Bake into one .litematic", "", "export"))));
         }
         m.add(sep());
         m.add(danger("delete", "Delete", "X"));
@@ -274,19 +275,24 @@ public final class MenuModel {
         m.add(item("rename", "Rename", "F2", ""));
         m.add(sep());
         m.add(sub("Transform", "move", transform(true)));
-        m.add(sub("Modifiers", "array", List.of(
-                item("mod.array", "Add Array", "", "array", !hasMod(a, ArrayModifier.class), "It has an array already"),
-                item("mod.boolean", "Add Boolean", "", "cutter"))));
+        List<Item> amods = new ArrayList<>();
+        amods.add(item("mod.array", "Add Array", "", "array", !hasMod(a, ArrayModifier.class), "It has an array already"));
+        amods.add(item("mod.boolean", "Add Boolean", "", "cutter"));
+        if (hasMod(a, ArrayModifier.class)) {
+            amods.add(sep());
+            amods.add(item("mod.realise", "Realise array", "", "realise"));
+        }
+        m.add(sub("Modifiers", "array", amods));
         m.addAll(frontOrder(a, false));
         List<Item> asm = new ArrayList<>();
         if (linked) asm.add(item("asm.makelocal", "Make local (copy files)", "", "local"));
         asm.add(item("asm.breakup", "Break up in place", "", "explode"));
-        asm.add(later("asm.realise", "Realise (independent copies)", "", "realise"));
+        asm.add(item("asm.realise", "Realise (independent copies)", "", "realise"));
         if (linked) {
-            asm.add(later("asm.reload", "Reload from source", "", "sync"));
-            asm.add(later("asm.open", "Open source project", "", "project"));
+            asm.add(item("asm.reload", "Reload from source", "", "sync"));
+            asm.add(item("asm.open", "Open source", "", "project"));
         } else {
-            asm.add(later("asm.savelasm", "Save as linked .lasm…", "", "export"));
+            asm.add(item("asm.savelasm", "Save as linked .lasm", "", "export"));
         }
         m.add(sub("Assembly", "assembly", asm));
         m.add(sep());
@@ -294,7 +300,7 @@ public final class MenuModel {
         m.add(item("local", "Local view", "/", "local"));
         m.add(item("frame", "Frame selected", "F", "frame"));
         m.add(sep());
-        m.add(sub("Export", "export", List.of(later("export.zip", "Assembly (.zip)…", "", "export"), later("export.bake", "Bake to one .litematic…", "", "export"))));
+        m.add(sub("Export", "export", List.of(item("export.zip", "Assembly (.zip)", "", "export"), item("export.bake", "Bake to one .litematic", "", "export"))));
         m.add(sep());
         m.add(danger("delete", "Delete", "X"));
         return clean(m);
@@ -326,7 +332,7 @@ public final class MenuModel {
         m.add(item("assembly.create", "Create assembly from folder", "Ctrl G", "group", !f.children().isEmpty(), "The folder is empty"));
         m.add(item("folder.toproject", "Convert to project", "", "project", !ro, "Read-only"));
         m.add(sep());
-        m.add(later("export.zip", "Export folder (.zip)…", "", "export"));
+        m.add(item("export.zip", "Export folder (.zip)", "", "export", !f.children().isEmpty(), "The folder is empty"));
         m.add(sep());
         m.add(danger("delete", "Delete folder", "X"));
         return clean(m);
@@ -340,12 +346,12 @@ public final class MenuModel {
         m.add(item("rename", "Rename", "F2", ""));
         m.add(item("add.folder", "New folder", "", "folder"));
         m.add(sub("Add", "plus", addItems(true, "")));
-        if (!p.active()) m.add(later("proj.link", "Link into active project as assembly", "", "link"));
+        if (!p.active()) m.add(item("proj.link", "Link into active project as assembly", "", "link", c.scene().activeProject() != null, "There is no active project"));
         m.add(sep());
         if (p.sync() == ProjectNode.Sync.SHARED) m.add(later("proj.push", "Push changes to Syncmatica", "", "sync"));
         m.add(later("proj.share", p.sync() == ProjectNode.Sync.SHARED ? "Stop sharing" : "Share on Syncmatica", "", "sync"));
         m.add(sep());
-        m.add(sub("Export", "export", List.of(later("export.zip", "Project (.zip)…", "", "export"), later("export.bake", "Bake to one .litematic…", "", "export"))));
+        m.add(sub("Export", "export", List.of(item("export.zip", "Project (.zip)", "", "export"), item("export.bake", "Bake to one .litematic", "", "export"))));
         m.add(item("proj.explorer", "Show in file explorer", "", ""));
         m.add(sep());
         m.add(item("proj.close", "Close project", "", "close"));

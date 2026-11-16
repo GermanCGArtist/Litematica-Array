@@ -2,6 +2,7 @@ package dev.schemarray.editor.pick;
 
 import dev.schemarray.editor.core.ArrayCells;
 import dev.schemarray.editor.core.ArrayModifier;
+import dev.schemarray.editor.core.AssemblyBounds;
 import dev.schemarray.editor.core.AssemblyNode;
 import dev.schemarray.editor.core.Box;
 import dev.schemarray.editor.core.Modifier;
@@ -32,8 +33,18 @@ public final class WorldBoxes {
     private final Map<UUID, Owned> owners = new LinkedHashMap<>();
     private final Map<UUID, List<Box>> objects = new LinkedHashMap<>();
 
+    private final Map<UUID, List<Box>> cells = new LinkedHashMap<>();
+
     /** Computes the boxes of every visible, present object of the scene. */
     public WorldBoxes(Scene scene, Function<ObjectNode, Vec3i> sizeOf) {
+        this(scene, sizeOf, null);
+    }
+
+    /**
+     * As above; with an {@code env} the assemblies are measured with {@link AssemblyBounds}, so a linked assembly
+     * (whose parts are not in the scene) has boxes, and the array copies of an assembly are boxes too.
+     */
+    public WorldBoxes(Scene scene, Function<ObjectNode, Vec3i> sizeOf, AssemblyBounds.Env env) {
         Map<UUID, List<Box>> lists = new LinkedHashMap<>();
         Map<UUID, Node> nodes = new LinkedHashMap<>();
         for (Node n : scene.allNodes()) {
@@ -52,6 +63,17 @@ public final class WorldBoxes {
             for (Box b : bs) u = u.union(b);
             owners.put(e.getKey(), new Owned(nodes.get(e.getKey()), bs, u));
         }
+        if (env != null) {
+            for (Node n : scene.allNodes()) {
+                if (!(n instanceof AssemblyNode a) || scene.ownerOf(a) != a || TreeModel.effectivelyHidden(a) || !needsBounds(a)) continue;
+                AssemblyBounds.Frame f = AssemblyBounds.frame(a, null, env);
+                List<Box> all = AssemblyBounds.boxesIn(a, null, env);
+                Box u = AssemblyBounds.union(all);
+                if (u == null) continue;
+                owners.put(a.id(), new Owned(a, all, u));
+                cells.put(a.id(), AssemblyBounds.cellUnions(f, a.transform()));
+            }
+        }
     }
 
     /** The base box of an object, then one box per array cell. */
@@ -66,6 +88,22 @@ public final class WorldBoxes {
             out.add(base.transformed(new Transform(world.apply(off), world.rot(), world.mirror())));
         }
         return out;
+    }
+
+    /** An assembly needs the full measuring when it is linked, or it or something inside it has an array. */
+    private static boolean needsBounds(AssemblyNode a) {
+        if (a.isLinked()) return true;
+        for (Node x : a.subtree()) if (x instanceof AssemblyNode y && AssemblyBounds.hasEnabledArray(y)) return true;
+        return false;
+    }
+
+    /**
+     * The box of every cell of an assembly with an array (the original first, then each copy), in the world; empty
+     * for an assembly without one (or one that was not measured).
+     */
+    public List<Box> cellBoxes(UUID assemblyId) {
+        List<Box> c = cells.getOrDefault(assemblyId, List.of());
+        return c.size() > 1 ? c : List.of();
     }
 
     /** The owners that can be picked, by id. */
@@ -109,6 +147,10 @@ public final class WorldBoxes {
             if (n == null) continue;
             for (Node x : n.subtree()) {
                 for (Box b : objectBoxes(x.id())) u = u == null ? b : u.union(b);
+                if (x instanceof AssemblyNode && cells.containsKey(x.id())) {      // an assembly with an array or links: all its cells
+                    Box ou = owners.get(x.id()).union();
+                    u = u == null ? ou : u.union(ou);
+                }
             }
         }
         return u;

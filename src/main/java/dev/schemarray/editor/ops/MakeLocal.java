@@ -39,11 +39,17 @@ public final class MakeLocal extends BaseCommand {
     }
 
     private String base(EditContext c, AssemblyNode a) {
-        return sourceBase != null ? sourceBase : c.baseDir(a);
+        return sourceBase != null ? sourceBase : LinkTargets.base(c.baseDir(a), lasmPath(c, a));
+    }
+
+    /** The port path of the linked file; null when the link leaves the schematics folder. */
+    private static String lasmPath(EditContext c, AssemblyNode a) {
+        String t = LinkTargets.target(c.baseDir(a), ((AssemblyNode.Link) a.source()).path());
+        return t == null ? "" : t;
     }
 
     private AssemblyIo.Lasm read(EditContext c, AssemblyNode a) throws IOException {
-        return AssemblyIo.fromJson(c.fs().readString(c.path(a, ((AssemblyNode.Link) a.source()).path())));
+        return AssemblyIo.fromJson(c.fs().readString(lasmPath(c, a)));
     }
 
     @Override
@@ -54,7 +60,8 @@ public final class MakeLocal extends BaseCommand {
         Refusal ro = Nodes.readOnly(a);
         if (ro != null) return ro;
         if (c.scene().projectOf(a) == null) return new Refusal(Nodes.q(a) + " is not in a project, so there is no files folder to copy into");
-        String lasm = c.path(a, ((AssemblyNode.Link) a.source()).path());
+        String lasm = lasmPath(c, a);
+        if (lasm.isEmpty()) return new Refusal("The link " + ((AssemblyNode.Link) a.source()).path() + " points outside the schematics folder");
         if (!c.fs().exists(lasm)) return new Refusal("The linked file " + lasm + " is missing");
         AssemblyIo.Lasm l;
         try {
@@ -97,6 +104,18 @@ public final class MakeLocal extends BaseCommand {
             Node copy = copier.copy(part);
             copier.remapBooleans(copy);
             parts.add(copy);
+        }
+        String destDir = LinkTargets.normalize(dest);
+        if (destDir != null && !destDir.equals(LinkTargets.normalize(from))) {
+            // links inside the .lasm were relative to its base: point them at the same files from this project
+            for (Node p : parts) {
+                for (Node s : p.subtree()) {
+                    if (s instanceof AssemblyNode na && na.isLinked()) {
+                        String t = LinkTargets.target(from, ((AssemblyNode.Link) na.source()).path());
+                        if (t != null) na.setSource(new AssemblyNode.Link(LinkTargets.relative(destDir, t)));
+                    }
+                }
+            }
         }
         a.clearChildren();
         for (Node p : parts) a.addChild(p);

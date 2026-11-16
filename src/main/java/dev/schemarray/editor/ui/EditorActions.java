@@ -26,6 +26,7 @@ import dev.schemarray.editor.ops.NewFolder;
 import dev.schemarray.editor.ops.RealiseArray;
 import dev.schemarray.editor.ops.Refusal;
 import dev.schemarray.editor.ops.Rotate;
+import dev.schemarray.editor.ops.SaveAsLinked;
 import dev.schemarray.editor.ops.SetFront;
 import dev.schemarray.editor.ops.SetHidden;
 import dev.schemarray.editor.ops.UndoStack;
@@ -93,6 +94,31 @@ public final class EditorActions {
 
         /** Toggles local view. */
         default void toggleLocalView() {}
+
+        /** The size an array of an assembly works on (its parts' union, without its own array), or null when unknown. */
+        default Vec3i sizeOfAssembly(AssemblyNode a) {
+            return null;
+        }
+
+        /** Opens the picker of .lasm files to link under this parent. */
+        default void requestAddAssembly(UUID parentId) {}
+
+        /** Opens the picker of projects to link under this parent. */
+        default void requestLinkProject(UUID parentId) {}
+
+        /** Links the project into the parent as an assembly; false when refused (the host shows why). */
+        default boolean linkProject(UUID parentId, ProjectNode project) {
+            return false;
+        }
+
+        /** Reload from source: reads every linked file again. */
+        default void reloadLinks() {}
+
+        /** Open source of a linked assembly. */
+        default void openSource(AssemblyNode a) {}
+
+        /** An export: {@code kind} is "zip" (the right zip for the selection), "bake" or "litematic" (one object's file). */
+        default void export(String kind, List<Node> nodes) {}
     }
 
     private final Supplier<UndoStack> stack;
@@ -133,14 +159,17 @@ public final class EditorActions {
                  "t.mirrorz", "mod.array", "mod.boolean", "mod.realise", "front.front", "front.forward", "front.backward",
                  "front.back", "assembly.create", "hide", "delete", "asm.makelocal", "asm.breakup", "part.select.owner",
                  "t.move", "box", "local", "local.leave",
-                 "part.makelocal", "folder.toproject", "loose.toproject", "proj.active", "proj.explorer", "proj.close" -> true;
+                 "part.makelocal", "folder.toproject", "loose.toproject", "proj.active", "proj.explorer", "proj.close",
+                 "add.assembly", "add.link", "proj.link", "asm.realise", "asm.reload", "asm.open", "asm.savelasm", "assembly.createlinked",
+                 "export.zip", "export.bake", "export.schem" -> true;
             default -> false;
         };
     }
 
     /** Why this entry cannot run now (asks the command), or empty. */
     public Optional<String> refusal(String id) {
-        Optional<Command> c = build(id);
+        boolean chain = (id.equals("asm.breakup") || id.equals("asm.realise")) && single(AssemblyNode.class).filter(AssemblyNode::isLinked).isPresent();
+        Optional<Command> c = build(chain ? "asm.makelocal" : id);      // a linked assembly is made local first, in the same step
         if (c.isEmpty()) return Optional.empty();
         return c.get().check(stack.get().context()).map(Refusal::reason);
     }
@@ -210,6 +239,8 @@ public final class EditorActions {
             case "add.folder" -> Optional.of(new NewFolder(addParent().id(), "Folder", -1));
             case "asm.makelocal" -> single(AssemblyNode.class).map(a -> new MakeLocal(a.id()));
             case "asm.breakup" -> single(AssemblyNode.class).map(a -> new BreakUp(a.id(), sizeOfNode(a)));
+            case "asm.realise" -> single(AssemblyNode.class).map(a -> new BreakUp(a.id(), sizeOfNode(a), true));
+            case "asm.savelasm" -> single(AssemblyNode.class).map(a -> new SaveAsLinked(a.id(), null));
             case "part.makelocal" -> single(Node.class).map(Node::id).map(scene()::byId).map(scene()::ownerOf).map(o -> new MakeLocal(o.id()));
             case "mod.realise" -> single(Node.class).map(n -> new RealiseArray(n.id(), sizeOfNode(n)));
             case "folder.toproject" -> single(FolderNode.class).map(f -> new ConvertFolderToProject(f.id(), null));
@@ -229,6 +260,10 @@ private static boolean hasArray(Node n) {        List<dev.schemarray.editor.core
         if (n instanceof ObjectNode o) {
             Vec3i s = host.sizeOf(o);
             return s == null ? new Vec3i(1, 1, 1) : s;
+        }
+        if (n instanceof AssemblyNode a) {
+            Vec3i s = host.sizeOfAssembly(a);
+            if (s != null) return s;
         }
         Box b = host.boxOf(List.of(n.id()));
         return b == null ? new Vec3i(1, 1, 1) : b.size();
@@ -321,6 +356,38 @@ private static boolean hasArray(Node n) {        List<dev.schemarray.editor.core
             case "local.leave":
                 host.toggleLocalView();
                 return true;
+            case "add.assembly":
+                host.requestAddAssembly(addParent().id());
+                return true;
+            case "add.link":
+                host.requestLinkProject(addParent().id());
+                return true;
+            case "proj.link": {
+                ProjectNode active = scene.activeProject();
+                if (active == null) {
+                    host.toast(ToastQueue.Level.WARN, "There is no active project to link into", null, null);
+                    return false;
+                }
+                return single(ProjectNode.class).map(p -> host.linkProject(active.id(), p)).orElse(false);
+            }
+            case "asm.reload":
+                host.reloadLinks();
+                host.toast(ToastQueue.Level.INFO, "Reloaded the linked files", null, null);
+                return true;
+            case "asm.open":
+                return single(AssemblyNode.class).map(a -> {
+                    host.openSource(a);
+                    return true;
+                }).orElse(false);
+            case "export.zip":
+                host.export("zip", nodes);
+                return true;
+            case "export.bake":
+                host.export("bake", nodes);
+                return true;
+            case "export.schem":
+                host.export("litematic", nodes);
+                return true;
             case "add.schematic":
                 host.requestAddSchematic(addParent().id());
                 return true;
@@ -357,6 +424,34 @@ private static boolean hasArray(Node n) {        List<dev.schemarray.editor.core
     private boolean runCommand(String id, List<Node> nodes) {
         UndoStack s = stack.get();
         switch (id) {
+            case "asm.breakup":
+            case "asm.realise": {
+                Optional<AssemblyNode> asm = single(AssemblyNode.class);
+                if (asm.isEmpty() || !asm.get().isLinked()) break;          // a local assembly is one command (below)
+                AssemblyNode a = asm.get();
+                boolean realise = id.equals("asm.realise");
+                // a linked assembly: make it local (its files are copied into the project, so they are its own), then break it up
+                boolean ok = transaction((realise ? "Realise " : "Break up ") + a.name(),
+                        List.of(new MakeLocal(a.id()), new BreakUp(a.id(), sizeOfNode(a), false)));
+                if (ok) host.toast(ToastQueue.Level.INFO, (realise ? "Realised " : "Broke up ") + "\"" + a.name() + "\"", "Undo", this::undo);
+                return ok;
+            }
+            case "assembly.createlinked": {
+                CreateAssembly create = new CreateAssembly(ids(), "Assembly", null);
+                Optional<Refusal> first = create.check(s.context());
+                if (first.isPresent()) {
+                    host.toast(ToastQueue.Level.WARN, first.get().reason(), null, null);
+                    return false;
+                }
+                SaveAsLinked save = new SaveAsLinked(create.assemblyId(), null);
+                boolean ok = transaction("Create linked assembly", List.of(create, save));
+                if (ok) {
+                    sel.set(create.assemblyId());
+                    host.showInTree(create.assemblyId());
+                    host.toast(ToastQueue.Level.INFO, "Saved as " + save.lasmPath() + " and linked", "Undo", this::undo);
+                }
+                return ok;
+            }
             case "t.mirrorz": {
                 Vec3i p = pivot();
                 return transaction("Mirror Z", List.of(new MirrorX(ids(), p), new Rotate(ids(), p, 2)));
@@ -433,9 +528,9 @@ private static boolean hasArray(Node n) {        List<dev.schemarray.editor.core
             if (ok) host.toast(ToastQueue.Level.INFO, "Moved. Files are moved, or copied when other objects still use them", "Undo", this::undo);
             return ok;
         }
-        if (cmd instanceof RealiseArray || cmd instanceof BreakUp || cmd instanceof MakeLocal) {
+        if (cmd instanceof RealiseArray || cmd instanceof BreakUp || cmd instanceof MakeLocal || cmd instanceof SaveAsLinked) {
             ok = execute(cmd);
-            if (ok) host.toast(ToastQueue.Level.INFO, cmd.label(), "Undo", this::undo);
+            if (ok) host.toast(ToastQueue.Level.INFO, cmd instanceof SaveAsLinked sv ? "Saved as " + sv.lasmPath() + " and linked" : cmd.label(), "Undo", this::undo);
             return ok;
         }
         return execute(cmd);

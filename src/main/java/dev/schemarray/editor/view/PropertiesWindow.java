@@ -398,7 +398,8 @@ public final class PropertiesWindow {
         float sc = Ui.s();
         transformSection(s, a, List.of(a.id()), true);
         Ui.section("Assembly");
-        ImGui.text("Parts: " + a.children().size());
+        var linkedParts = a.isLinked() ? s.linkedParts(a, null) : null;
+        ImGui.text("Parts: " + (a.isLinked() ? (linkedParts == null ? "(file unreadable)" : String.valueOf(linkedParts.parts().size())) : String.valueOf(a.children().size())));
         if (a.isLinked()) {
             ImGui.pushStyleColor(ImGuiCol.Text, Ui.c(Ui.LINK));
             ImGui.textWrapped(((AssemblyNode.Link) a.source()).path());
@@ -410,11 +411,23 @@ public final class PropertiesWindow {
         if (a.isLinked()) ImGui.sameLine();
         if (ImGui.button("Break up")) s.actions.run("asm.breakup");
         ImGui.sameLine();
-        Ui.button("Realise", false, false, 0, MenuModel.LATER);
+        if (ImGui.button("Realise")) s.actions.run("asm.realise");
+        Ui.tooltip("Break up into independent objects with their own file copies");
         if (a.isLinked()) {
             ImGui.sameLine();
-            Ui.button("Open source", false, false, 0, MenuModel.LATER);
+            if (ImGui.button("Open source")) s.actions.run("asm.open");
+            ImGui.sameLine();
+            if (ImGui.button("Reload")) s.actions.run("asm.reload");
+            Ui.tooltip("Read the linked file again");
         }
+        if (!a.isLinked()) {
+            ImGui.sameLine();
+            if (ImGui.button("Save as linked")) s.actions.run("asm.savelasm");
+            Ui.tooltip("Write the parts to files/assemblies/ as a .lasm and link it");
+        }
+        if (ImGui.button("Export .zip")) s.actions.run("export.zip");
+        ImGui.sameLine();
+        if (ImGui.button("Bake to .litematic")) s.actions.run("export.bake");
         frontSection(s, a);
         modifiersSection(s, a, a.mods(), true, true, locked);
     }
@@ -558,7 +571,12 @@ public final class PropertiesWindow {
         ImGui.sameLine();
         Ui.button("Push", false, false, 0, "No project is shared on Syncmatica. " + MenuModel.LATER);
         ImGui.sameLine();
-        Ui.button("Export ▸", false, false, 0, MenuModel.LATER);
+        if (ImGui.button("Export ▸")) ImGui.openPopup("##projexport");
+        if (ImGui.beginPopup("##projexport")) {
+            if (ImGui.menuItem("Project (.zip)")) s.actions.run("export.zip");
+            if (ImGui.menuItem("Bake to one .litematic")) s.actions.run("export.bake");
+            ImGui.endPopup();
+        }
         ImGui.dummy(0, 4 * sc);
         Ui.smallDim("New objects go into the active project. Linking this project into another one places it there as an assembly.");
     }
@@ -574,7 +592,7 @@ public final class PropertiesWindow {
         ImGui.sameLine();
         if (ImGui.button("Convert to project")) s.actions.run("folder.toproject");
         ImGui.sameLine();
-        Ui.button("Export .zip", false, false, 0, MenuModel.LATER);
+        if (Ui.button("Export .zip", false, !f.children().isEmpty(), 0, "The folder is empty")) s.actions.run("export.zip");
         ImGui.dummy(0, 4 * sc);
         Ui.smallDim("Folders only organise. Front order decides which blocks count.");
     }
@@ -784,6 +802,7 @@ public final class PropertiesWindow {
 
     private static Vec3i sizeOfNode(EditorSession s, Node n) {
         if (n instanceof ObjectNode o) return s.sizeOf(o);
+        if (n instanceof AssemblyNode a) return s.assemblySize(a);
         Box b = boxOf(s, List.of(n.id()));
         return b == null ? null : b.size();
     }
