@@ -66,6 +66,7 @@ public final class ProjectManager {
     private final Map<UUID, String> saved = new HashMap<>();
     private String savedLoose;
     private Consumer<ProjectNode> closeHook = p -> {};
+    private Consumer<ProjectNode> saveHook = p -> {};
     private int ticks;
 
     public ProjectManager(Env env) {
@@ -91,6 +92,11 @@ public final class ProjectManager {
 
     public void setDimension(String dim) {
         this.dim = dim;
+    }
+
+    /** Called after a project was written (derived-file cache cleanup). */
+    public void setSaveHook(Consumer<ProjectNode> hook) {
+        this.saveHook = hook == null ? p -> {} : hook;
     }
 
     /** Called with a project just before it is closed (the reconciler removes its placements). */
@@ -220,6 +226,11 @@ public final class ProjectManager {
         try {
             ProjectIo.write(p, ProjectLayout.projectFile(dirOf(p)));
             saved.put(p.id(), ProjectIo.toJson(p));
+            try {
+                saveHook.accept(p);
+            } catch (RuntimeException e) {
+                System.out.println("[SchematicArray] derived cache cleanup failed: " + e);
+            }
             return true;
         } catch (IOException | RuntimeException e) {
             System.out.println("[SchematicArray] cannot save project " + p.name() + ": " + e.getMessage());

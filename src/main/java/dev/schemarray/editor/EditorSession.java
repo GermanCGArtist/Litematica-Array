@@ -13,6 +13,7 @@ import dev.schemarray.editor.core.Vec3i;
 import dev.schemarray.editor.gizmo.Pivots;
 import dev.schemarray.editor.io.ProjectLayout;
 import dev.schemarray.editor.io.ZipExport;
+import dev.schemarray.editor.mc.DerivedFiles;
 import dev.schemarray.editor.mc.ExternalChange;
 import dev.schemarray.editor.mc.LasmCache;
 import dev.schemarray.editor.mc.LinkPaths;
@@ -140,6 +141,7 @@ public final class EditorSession {
     private Set<UUID> issues = Set.of();
     private final Map<java.nio.file.Path, Long> unreadable = new HashMap<>();
     private Map<UUID, List<Overlaps.Overlap>> overlapsByNode = Map.of();
+    private List<Overlaps.Overlap> overlapList = List.of();
 
     private final Properties config = new Properties();
     private final Path configFile = FabricLoader.getInstance().getConfigDir().resolve("schemarray").resolve("editor-ui.properties");
@@ -294,6 +296,7 @@ public final class EditorSession {
         if (!driftRegistered) {
             driftRegistered = true;
             Reconciler.setDriftListener(this::onDrift);
+            DerivedFiles.shared().setBusy(() -> gizmo.modal() || gizmo.preview() != null || (undo != null && undo.inTransaction()));
         }
         if (dirtyFlag && ++dirtyTicks >= 20) {
             dirtyFlag = false;
@@ -538,18 +541,131 @@ public final class EditorSession {
         boxesAt = 0;
     }
 
+
+    // ------------------------------------------------------------------------------------------ derived files, Boolean apply, eyedropper
+
+    private UUID eyeObject;
+    private int eyeMod = -1;
+    private UUID applying;
+
+    /** Arms the eyedropper for the Boolean modifier {@code index} of an object: the next click on an object in the world picks it. */
+    public void startEyedrop(UUID objectId, int index) {
+        gizmo.cancel();
+        eyeObject = objectId;
+        eyeMod = index;
+    }
+
+    public void cancelEyedrop() {
+        eyeObject = null;
+        eyeMod = -1;
+    }
+
+    public boolean eyedropping() {
+        return eyeObject != null;
+    }
+
+    /** A click while the eyedropper is armed: the owner under the cursor becomes the cutter (a schematic object of the same project). */
+    public void eyedropPick(UUID owner) {
+        UUID obj = eyeObject;
+        int idx = eyeMod;
+        cancelEyedrop();
+        Node target = owner == null ? null : scene().byId(owner);
+        Node n = obj == null ? null : scene().byId(obj);
+        if (!(n instanceof ObjectNode o) || idx < 0 || idx >= o.mods().size() || !(o.mods().get(idx) instanceof dev.schemarray.editor.core.BooleanModifier bm)) return;
+        if (!(target instanceof ObjectNode t)) {
+            toast(ToastQueue.Level.WARN, target == null ? "Nothing there to pick" : "Pick a schematic object as the cutter, not an assembly");
+            return;
+        }
+        if (t == o || scene().projectOf(t) != scene().projectOf(o)) {
+            toast(ToastQueue.Level.WARN, "The cutter must be another object of the same project");
+            return;
+        }
+        for (Node a = o; a != null; a = a.parent()) if (a == t) return;
+        for (Node a = t.parent(); a != null; a = a.parent()) if (a == o) return;
+        dev.schemarray.editor.core.BooleanModifier c = bm.copy();
+        c.targetId = t.id();
+        actions.execute(new dev.schemarray.editor.ops.ModifierEdits.EditModifier(o.id(), idx, "target", c));
+        undoStack().breakMerge();
+        toast(ToastQueue.Level.INFO, "Cutter: " + t.name());
+    }
+
+    /** The mask plan of an object as it is now (client thread). */
+    public dev.schemarray.editor.core.MaskPlan.Plan planOf(ObjectNode o, dev.schemarray.editor.core.MaskPlan.Filter f) {
+        return DerivedFiles.shared().planOf(scene(), o, f);
+    }
+
+    public boolean applying(UUID objectId) {
+        return objectId.equals(applying);
+    }
+
+    /**
+     * Apply Boolean: builds the file of this Boolean alone (the derived file of the plan with only this modifier; a
+     * cache hit is immediate), then runs {@code ApplyBoolean}. The status bar and the button show the progress.
+     */
+    public void applyBoolean(ObjectNode o, int index) {
+        if (applying != null) return;
+        ProjectNode proj = scene().projectOf(o);
+        Path source = fileOf(o);
+        if (proj == null || source == null) {
+            toast(ToastQueue.Level.WARN, "\"" + o.name() + "\" needs to be in a project to apply a Boolean");
+            return;
+        }
+        var plan = planOf(o, dev.schemarray.editor.core.MaskPlan.Filter.onlyBoolean(index));
+        if (plan.isEmpty()) {
+            toast(ToastQueue.Level.WARN, "The Boolean removes nothing, so there is nothing to apply");
+            return;
+        }
+        UUID id = o.id();
+        applying = id;
+        ToastQueue.Toast progress = toast(ToastQueue.Level.INFO, "Building the cut for \"" + o.name() + "\"…");
+        DerivedFiles.shared().build(plan, source, projectDir(proj), b -> {
+            applying = null;
+            if (!b.ok() || b.file() == null) {
+                toast(ToastQueue.Level.ERROR, "Apply failed: " + (b.error() == null ? "no file" : b.error()));
+                return;
+            }
+            Node now = scene().byId(id);
+            if (!(now instanceof ObjectNode no) || index >= no.mods().size()) return;
+            String rel = schematicsDir.relativize(b.file().toAbsolutePath().normalize()).toString().replace(java.io.File.separatorChar, '/');
+            actions.transaction("Apply Boolean", List.of(new dev.schemarray.editor.ops.ApplyBoolean(id, index, rel)));
+            toast(ToastQueue.Level.INFO, "Applied: \"" + no.name() + "\" now uses " + no.file());
+        });
+    }
+
+    /** Blocks the front-order trims take from this object, or -1 while unknown. */
+    public long trimmedBlocks(UUID id) {
+        DerivedFiles.Info i = DerivedFiles.shared().infoOf(id);
+        return i == null || i.removed() < 0 ? -1 : i.removed() - i.booleanRemoved();
+    }
+
+    /** Blocks the Boolean modifiers remove from this object, or -1 while unknown. */
+    public long booleanRemoved(UUID id) {
+        DerivedFiles.Info i = DerivedFiles.shared().infoOf(id);
+        return i == null ? -1 : i.booleanRemoved();
+    }
+
+    /** Blocks {@code loser} lost to {@code winner}, or -1 while unknown. */
+    public long lostTo(UUID loser, UUID winner) {
+        DerivedFiles.Info i = DerivedFiles.shared().infoOf(loser);
+        if (i == null || i.removed() < 0) return -1;
+        return i.trimBy().getOrDefault(winner, 0L);
+    }
     private void computeOverlaps(Scene sc) {
         Set<UUID> ids = new HashSet<>();
         Map<UUID, List<Overlaps.Overlap>> by = new HashMap<>();
-        for (Overlaps.Overlap o : Overlaps.find(boxes.overlapItems())) {
-            ids.add(o.loser());
-            ids.add(o.winner());
+        List<Overlaps.Overlap> all = Overlaps.find(boxes.overlapItems());
+        for (Overlaps.Overlap o : all) {
+            DerivedFiles.Info li = DerivedFiles.shared().infoOf(o.loser());
+            if (li == null || li.removed() != 0) ids.add(o.loser());   // the Issues list: owners that lose blocks (not known to lose none)
             by.computeIfAbsent(o.loser(), k -> new ArrayList<>()).add(o);
             by.computeIfAbsent(o.winner(), k -> new ArrayList<>()).add(o);
         }
-        for (Node n : sc.allNodes()) if (n instanceof ObjectNode o && o.missing()) ids.add(o.id());
+        for (Node n : sc.allNodes()) {
+            if (n instanceof ObjectNode o && (o.missing() || DerivedFiles.shared().infoOf(o.id()) != null && DerivedFiles.shared().infoOf(o.id()).status() == DerivedFiles.Status.FAILED)) ids.add(o.id());
+        }
         issues = ids;
         overlapsByNode = by;
+        overlapList = all;
     }
 
     /** Objects and assemblies that overlap another one, plus missing objects (the Issues chip). */
@@ -558,6 +674,12 @@ public final class EditorSession {
         return issues;
     }
 
+
+    /** Every overlap box of the scene (loser and winner), for the overlay. */
+    public List<Overlaps.Overlap> allOverlaps() {
+        boxes();
+        return overlapList;
+    }
     public List<Overlaps.Overlap> overlapsOf(UUID id) {
         boxes();
         return overlapsByNode.getOrDefault(id, List.of());
@@ -807,6 +929,12 @@ public final class EditorSession {
         @Override
         public void openSource(AssemblyNode a) {
             EditorSession.this.openSource(a);
+        }
+
+        @Override
+        public void applyBoolean(UUID objectId, int index) {
+            Node n = scene().byId(objectId);
+            if (n instanceof ObjectNode o) EditorSession.this.applyBoolean(o, index);
         }
 
         @Override

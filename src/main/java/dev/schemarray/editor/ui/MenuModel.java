@@ -240,7 +240,7 @@ public final class MenuModel {
             }
             if (single && hasBool) {
                 if (!hasArray) mods.add(sep());
-                mods.add(later("mod.apply", "Apply Boolean → .litematic", "", "cutter"));
+                mods.add(item("mod.apply", "Apply Boolean → .litematic", "", "cutter"));
             }
             m.add(sub("Modifiers", "array", mods));
         } else {

@@ -377,6 +377,13 @@ public final class SceneWindow {
             out.add(new Badge("", f.front() > 0 ? "P" + f.front() : "P-", Theme.FG, 0.12f, Theme.FG, true,
                     "Front order, not tree order, decides which object keeps overlapping blocks.", false));
         }
+        var di = dev.schemarray.editor.mc.DerivedFiles.shared().infoOf(n.id());
+        if (di != null && di.status() == dev.schemarray.editor.mc.DerivedFiles.Status.FAILED) {
+            out.add(new Badge("", "!", Theme.ERR, 0.2f, Theme.ERR, true, "The derived file failed: " + di.error(), false));
+        } else if (di != null && di.removed() > 0) {
+            out.add(new Badge("", String.format(Locale.ROOT, "−%,d", di.removed()), Theme.ERR, 0.15f, Theme.ERR, true,
+                    "Blocks removed by objects in front and Booleans", false));
+        }
         return out;
     }
 

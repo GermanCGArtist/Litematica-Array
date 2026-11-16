@@ -110,7 +110,7 @@ public final class Gizmo {
 
     /** True while any gesture runs or box select is armed: its keys are checked before the editor shortcuts. */
     public boolean modal() {
-        return mode != Mode.IDLE || armed;
+        return mode != Mode.IDLE || armed || s.eyedropping();
     }
 
     /** True when the gizmo owns the mouse (dragging or hovering a handle), so the pick hover outline stays off. */
@@ -238,6 +238,7 @@ public final class Gizmo {
     public void cancel() {
         mode = Mode.IDLE;
         armed = false;
+        s.cancelEyedrop();
         pending = false;
         boxActive = false;
         typed = null;
@@ -326,6 +327,11 @@ public final class Gizmo {
 
     /** A left press on the viewport. Returns true when the gizmo or box select took it (picking must not). */
     public boolean onLeftPress(Minecraft mc) {
+        if (s.eyedropping()) {
+            double[] ec = cursor(mc);
+            s.eyedropPick(Picking.pickAt(s, mc, ec[0], ec[1]).owner());
+            return true;
+        }
         if (mode == Mode.TYPED || mode == Mode.AXIS || mode == Mode.PLANE || mode == Mode.RING) return true;
         double[] c = cursor(mc);
         if (armed) {
@@ -590,7 +596,7 @@ public final class Gizmo {
             }
         }
         if (mode == Mode.BOX) drawBoxRect(dl, sc);
-        if (armed && mode == Mode.IDLE) cursorWanted = UiHost.Cursor.CROSSHAIR;
+        if ((armed || s.eyedropping()) && mode == Mode.IDLE) cursorWanted = UiHost.Cursor.CROSSHAIR;
         if (mode == Mode.BOX) cursorWanted = UiHost.Cursor.CROSSHAIR;
         if (cursorWanted != null && !over) UiHost.setCursor(cursorWanted);
 

@@ -92,6 +92,7 @@ public final class EditorInputLayer implements UiLayer {
 
         if ((++frame & 1) == 0) Picking.updateHover(mc, UiHost.imguiWantsMouse() || s.gizmo.owningMouse());
         WorldOverlay.drawTags();
+        WorldOverlay.drawOverlapLabels();
         Toasts.draw(s);
         s.popupOpen = ImGui.isPopupOpen("", imgui.flag.ImGuiPopupFlags.AnyPopupId | imgui.flag.ImGuiPopupFlags.AnyPopupLevel);
     }

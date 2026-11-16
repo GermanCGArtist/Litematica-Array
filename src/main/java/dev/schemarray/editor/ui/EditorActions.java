@@ -119,6 +119,9 @@ public final class EditorActions {
 
         /** An export: {@code kind} is "zip" (the right zip for the selection), "bake" or "litematic" (one object's file). */
         default void export(String kind, List<Node> nodes) {}
+
+        /** Apply the Boolean modifier at {@code index} of an object (builds its file first when needed). */
+        default void applyBoolean(UUID objectId, int index) {}
     }
 
     private final Supplier<UndoStack> stack;
@@ -156,7 +159,7 @@ public final class EditorActions {
         return switch (id) {
             case "add.schematic", "add.folder", "select.all", "select.none", "select.contents", "frame.all", "frame",
                  "show.hidden", "undo", "redo", "duplicate", "dup.linked", "rename", "t.rot.cw", "t.rot.ccw", "t.mirror",
-                 "t.mirrorz", "mod.array", "mod.boolean", "mod.realise", "front.front", "front.forward", "front.backward",
+                 "t.mirrorz", "mod.array", "mod.boolean", "mod.realise", "mod.apply", "front.front", "front.forward", "front.backward",
                  "front.back", "assembly.create", "hide", "delete", "asm.makelocal", "asm.breakup", "part.select.owner",
                  "t.move", "box", "local", "local.leave",
                  "part.makelocal", "folder.toproject", "loose.toproject", "proj.active", "proj.explorer", "proj.close",
@@ -466,6 +469,17 @@ private static boolean hasArray(Node n) {        List<dev.schemarray.editor.core
                     cs.add(new ModifierEdits.AddModifier(n.id(), new ArrayModifier(), -1));
                 }
                 return runEach("Add Array", cs);
+            }
+            case "mod.apply": {
+                if (nodes.size() != 1 || !(nodes.get(0) instanceof ObjectNode o)) return false;
+                for (int i = 0; i < o.mods().size(); i++) {
+                    if (o.mods().get(i) instanceof BooleanModifier) {
+                        host.applyBoolean(o.id(), i);
+                        return true;
+                    }
+                }
+                host.toast(ToastQueue.Level.WARN, "\"" + o.name() + "\" has no Boolean to apply", null, null);
+                return false;
             }
             case "mod.boolean": {
                 List<Command> cs = new ArrayList<>();
